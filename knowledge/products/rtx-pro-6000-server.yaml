@@ -1,0 +1,87 @@
+product:
+  id: "rtx-pro-6000-blackwell-server-96gb"
+
+  manufacturer: "NVIDIA"
+
+  name: "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+
+  manufacturer_part_number: "900-2G153-0000-000"
+
+  memory:
+    capacity_gb: 96
+    type: "GDDR7 ECC"
+
+  architecture: "NVIDIA Blackwell"
+
+  interface: "PCIe 5.0 x16"
+
+  cooling: "Passive"
+
+  max_power_w: 600
+
+  category:
+    - professional_gpu
+    - server_gpu
+    - ai_hardware
+
+  primary_use_cases:
+    - local_llm_inference
+    - llm_fine_tuning
+    - ai_workstations
+    - ai_servers
+    - scientific_computing
+    - professional_rendering
+    - engineering_simulation
+
+commercial:
+
+  target_market:
+    - Spain
+    - European Union
+
+  target_customers:
+    - AI system integrators
+    - enterprises deploying on-premise AI
+    - IT infrastructure companies
+    - hardware resellers
+    - research centers
+    - universities
+    - VFX and rendering studios
+    - engineering companies
+
+  channels_to_research:
+    - amazon
+    - ebay
+    - google_shopping
+    - direct_b2b
+    - odoo_ecommerce
+
+  currency: "EUR"
+
+  target_sales_scenarios:
+
+    conservative:
+      price_ex_vat_eur: 12200
+
+    base:
+      price_ex_vat_eur: 13500
+
+    optimistic:
+      price_ex_vat_eur: 15000
+
+constraints:
+
+  do_not_invent:
+    - stock
+    - warranty
+    - certification
+    - delivery_time
+    - product_condition
+    - seller_authorization
+
+  require_human_approval_for:
+    - publishing_listing
+    - changing_price
+    - accepting_orders
+    - purchasing_inventory
+    - paid_advertising

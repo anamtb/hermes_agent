@@ -1,0 +1,15 @@
+name: hermes-commerce-agent
+version: 0.1.0
+
+description: "Autonomous commerce intelligence agent for hardware products"
+
+author: "Tu nombre o empresa"
+
+hermes_requires: ">=0.14.0"
+
+distribution_owned:
+  - distribution.yaml
+  - SOUL.md
+  - config.yaml
+  - skills/
+  - knowledge/

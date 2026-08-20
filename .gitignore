@@ -1,0 +1,39 @@
+# Secrets
+.env
+.env.*
+auth.json
+auth.lock
+
+
+# Hermes runtime
+memories/
+sessions/
+logs/
+plans/
+workspace/
+
+
+state.db
+state.db-shm
+state.db-wal
+
+
+gateway.pid
+gateway_state.json
+
+
+# Cache
+cache/
+*_cache/
+__pycache__/
+*.pyc
+
+
+# IDE
+.vscode/
+.idea/
+
+
+# OS
+.DS_Store
+Thumbs.db
