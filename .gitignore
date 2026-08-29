@@ -37,3 +37,6 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+# MCP local virtual environments
+mcp/**/.venv/
