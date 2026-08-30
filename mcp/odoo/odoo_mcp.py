@@ -419,5 +419,68 @@ def odoo_set_stock(
     }
 
 
+@mcp.tool()
+def odoo_publish_product(product_id: int) -> dict[str, Any]:
+    """
+    Publica un producto en el eCommerce de Odoo.
+
+    Requiere que ODOO_ALLOW_PUBLISH=true esté configurado
+    explícitamente en el .env del perfil.
+    """
+
+    values: dict[str, str] = {}
+
+    for raw_line in ENV_FILE.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip().strip('"').strip("'")
+
+    if values.get("ODOO_ALLOW_PUBLISH", "").lower() != "true":
+        raise RuntimeError(
+            "Publicación bloqueada. "
+            "ODOO_ALLOW_PUBLISH no está autorizado."
+        )
+
+    product = odoo_get_product(product_id)
+
+    if product.get("is_published"):
+        return {
+            "published": True,
+            "already_published": True,
+            "product": product,
+        }
+
+    result = odoo_post(
+        "product.template",
+        "write",
+        {
+            "ids": [product_id],
+            "vals": {
+                "is_published": True,
+            },
+        },
+    )
+
+    if result is not True:
+        raise RuntimeError("Odoo no confirmó la publicación")
+
+    updated = odoo_get_product(product_id)
+
+    if not updated.get("is_published"):
+        raise RuntimeError(
+            "Odoo no confirmó que el producto esté publicado"
+        )
+
+    return {
+        "published": True,
+        "already_published": False,
+        "product": updated,
+    }
+
+
 if __name__ == "__main__":
     mcp.run()
