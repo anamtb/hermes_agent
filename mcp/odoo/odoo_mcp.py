@@ -1,5 +1,9 @@
+import base64
+import ipaddress
+import socket
 from pathlib import Path
 from typing import Any
+from urllib.parse import urljoin, urlparse
 
 import httpx
 from mcp.server import MCPServer
@@ -478,6 +482,305 @@ def odoo_publish_product(product_id: int) -> dict[str, Any]:
     return {
         "published": True,
         "already_published": False,
+        "product": updated,
+    }
+
+
+PRODUCT_IMAGE_DIR = Path(
+    "/home/hermes/.hermes/assets/commerce-test/product-images"
+)
+
+MAX_IMAGE_SIZE = 10 * 1024 * 1024
+
+ALLOWED_IMAGE_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+}
+
+
+def _get_product_for_image(product_id: int) -> dict[str, Any]:
+    products = odoo_post(
+        "product.template",
+        "search_read",
+        {
+            "domain": [["id", "=", product_id]],
+            "fields": [
+                "name",
+                "default_code",
+                "is_published",
+                "website_url",
+            ],
+            "limit": 1,
+        },
+    )
+
+    if not products:
+        raise ValueError(f"No existe el producto con ID {product_id}")
+
+    return products[0]
+
+
+def _write_product_image(
+    product_id: int,
+    image_bytes: bytes,
+) -> dict[str, Any]:
+    if not image_bytes:
+        raise ValueError("La imagen está vacía")
+
+    if len(image_bytes) > MAX_IMAGE_SIZE:
+        raise ValueError("La imagen supera el límite de 10 MB")
+
+    encoded = base64.b64encode(image_bytes).decode("ascii")
+
+    result = odoo_post(
+        "product.template",
+        "write",
+        {
+            "ids": [product_id],
+            "vals": {
+                "image_1920": encoded,
+            },
+        },
+    )
+
+    if result is not True:
+        raise RuntimeError(
+            "Odoo no confirmó la actualización de la imagen"
+        )
+
+    updated = _get_product_for_image(product_id)
+
+    return updated
+
+
+def _validate_public_https_url(url: str) -> None:
+    parsed = urlparse(url)
+
+    if parsed.scheme != "https":
+        raise ValueError("Solo se permiten URLs HTTPS")
+
+    if not parsed.hostname:
+        raise ValueError("La URL no contiene un host válido")
+
+    try:
+        addresses = socket.getaddrinfo(
+            parsed.hostname,
+            parsed.port or 443,
+            type=socket.SOCK_STREAM,
+        )
+    except socket.gaierror as exc:
+        raise ValueError(
+            "No se pudo resolver el host de la imagen"
+        ) from exc
+
+    for address in addresses:
+        ip_text = address[4][0]
+        ip = ipaddress.ip_address(ip_text)
+
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+        ):
+            raise ValueError(
+                "La URL apunta a una dirección de red no permitida"
+            )
+
+
+def _download_public_image(url: str) -> tuple[bytes, str, str]:
+    current_url = url
+
+    with httpx.Client(
+        timeout=20.0,
+        follow_redirects=False,
+        headers={
+            "User-Agent": "Hermes-Commerce-Agent/1.0",
+        },
+    ) as client:
+
+        for _ in range(5):
+            _validate_public_https_url(current_url)
+
+            response = client.get(current_url)
+
+            if response.status_code in {
+                301,
+                302,
+                303,
+                307,
+                308,
+            }:
+                location = response.headers.get("location")
+
+                if not location:
+                    raise RuntimeError(
+                        "Redirección sin destino"
+                    )
+
+                current_url = urljoin(
+                    current_url,
+                    location,
+                )
+                continue
+
+            response.raise_for_status()
+
+            content_type = (
+                response.headers
+                .get("content-type", "")
+                .split(";", 1)[0]
+                .strip()
+                .lower()
+            )
+
+            if content_type not in ALLOWED_IMAGE_TYPES:
+                raise ValueError(
+                    f"Tipo de contenido no permitido: "
+                    f"{content_type or 'desconocido'}"
+                )
+
+            image_bytes = response.content
+
+            if len(image_bytes) > MAX_IMAGE_SIZE:
+                raise ValueError(
+                    "La imagen supera el límite de 10 MB"
+                )
+
+            return (
+                image_bytes,
+                content_type,
+                current_url,
+            )
+
+    raise RuntimeError(
+        "Demasiadas redirecciones al descargar la imagen"
+    )
+
+
+@mcp.tool()
+def odoo_set_product_image_from_file(
+    product_id: int,
+    image_filename: str,
+    confirmation: str = "",
+) -> dict[str, Any]:
+    """
+    Establece la imagen principal de un producto usando un archivo
+    proporcionado por el usuario.
+
+    Solo permite archivos dentro de:
+    /home/hermes/.hermes/assets/commerce-test/product-images/
+
+    Si el producto está publicado requiere:
+    confirmation="ACTUALIZAR_IMAGEN_PUBLICA"
+    """
+
+    product = _get_product_for_image(product_id)
+
+    if (
+        product.get("is_published")
+        and confirmation != "ACTUALIZAR_IMAGEN_PUBLICA"
+    ):
+        raise RuntimeError(
+            "El producto está publicado. "
+            "Se requiere confirmación explícita."
+        )
+
+    root = PRODUCT_IMAGE_DIR.resolve()
+    image_path = (root / image_filename).resolve()
+
+    if not image_path.is_relative_to(root):
+        raise ValueError(
+            "La ruta de imagen no está permitida"
+        )
+
+    if not image_path.is_file():
+        raise FileNotFoundError(
+            f"No existe la imagen: {image_filename}"
+        )
+
+    if image_path.suffix.lower() not in {
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".webp",
+    }:
+        raise ValueError(
+            "Solo se permiten JPG, JPEG, PNG y WEBP"
+        )
+
+    size = image_path.stat().st_size
+
+    if size > MAX_IMAGE_SIZE:
+        raise ValueError(
+            "La imagen supera el límite de 10 MB"
+        )
+
+    image_bytes = image_path.read_bytes()
+
+    updated = _write_product_image(
+        product_id,
+        image_bytes,
+    )
+
+    return {
+        "updated": True,
+        "source": "user_file",
+        "image_filename": image_filename,
+        "image_size_bytes": size,
+        "product": updated,
+    }
+
+
+@mcp.tool()
+def odoo_set_product_image_from_url(
+    product_id: int,
+    image_url: str,
+    confirmation: str = "",
+) -> dict[str, Any]:
+    """
+    Establece la imagen principal de un producto desde una URL
+    pública HTTPS previamente seleccionada y aprobada por el usuario.
+
+    Esta herramienta NO busca imágenes.
+
+    Hermes debe:
+    1. preguntar al usuario si quiere aportar una imagen o buscarla;
+    2. si elige Internet, buscar el producto exacto;
+    3. priorizar fabricante/proveedor autorizado;
+    4. mostrar la fuente al usuario;
+    5. obtener aprobación explícita;
+    6. solo entonces llamar esta herramienta.
+
+    Requiere siempre:
+    confirmation="USAR_IMAGEN_WEB_APROBADA"
+    """
+
+    if confirmation != "USAR_IMAGEN_WEB_APROBADA":
+        raise RuntimeError(
+            "La imagen web no ha sido aprobada explícitamente"
+        )
+
+    product = _get_product_for_image(product_id)
+
+    image_bytes, content_type, final_url = (
+        _download_public_image(image_url)
+    )
+
+    updated = _write_product_image(
+        product_id,
+        image_bytes,
+    )
+
+    return {
+        "updated": True,
+        "source": "approved_web_url",
+        "source_url": final_url,
+        "content_type": content_type,
+        "image_size_bytes": len(image_bytes),
         "product": updated,
     }
 
