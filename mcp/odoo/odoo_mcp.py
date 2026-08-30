@@ -195,5 +195,111 @@ def odoo_create_draft_product(
     }
 
 
+@mcp.tool()
+def odoo_get_product(product_id: int) -> dict[str, Any]:
+    """
+    Obtiene un producto concreto de Odoo por ID.
+    Herramienta de solo lectura.
+    """
+
+    products = odoo_post(
+        "product.template",
+        "search_read",
+        {
+            "domain": [["id", "=", product_id]],
+            "fields": [
+                "name",
+                "default_code",
+                "list_price",
+                "description_sale",
+                "active",
+                "sale_ok",
+                "is_published",
+                "website_url",
+            ],
+            "limit": 1,
+        },
+    )
+
+    if not products:
+        raise ValueError(f"No existe el producto con ID {product_id}")
+
+    return products[0]
+
+
+@mcp.tool()
+def odoo_update_draft_product(
+    product_id: int,
+    name: str = "",
+    default_code: str = "",
+    list_price: float | None = None,
+    description_sale: str = "",
+) -> dict[str, Any]:
+    """
+    Actualiza un producto de Odoo únicamente mientras NO esté publicado.
+
+    Seguridad:
+- no permite modificar productos publicados
+- no puede publicar productos
+- no elimina productos
+- no modifica contabilidad ni pagos
+    """
+
+    current = odoo_get_product(product_id)
+
+    if current.get("is_published"):
+        raise RuntimeError(
+            "El producto está publicado. "
+            "odoo_update_draft_product solo puede modificar borradores."
+        )
+
+    vals: dict[str, Any] = {}
+
+    if name.strip():
+        vals["name"] = name.strip()
+
+    if default_code.strip():
+        vals["default_code"] = default_code.strip()
+
+    if list_price is not None:
+        if list_price < 0:
+            raise ValueError("El precio no puede ser negativo")
+        vals["list_price"] = float(list_price)
+
+    if description_sale.strip():
+        vals["description_sale"] = description_sale.strip()
+
+    if not vals:
+        raise ValueError("No se ha indicado ningún campo para actualizar")
+
+    # La herramienta no acepta is_published como argumento.
+    # Además volvemos a forzarlo a False.
+    vals["is_published"] = False
+
+    result = odoo_post(
+        "product.template",
+        "write",
+        {
+            "ids": [product_id],
+            "vals": vals,
+        },
+    )
+
+    if result is not True:
+        raise RuntimeError("Odoo no confirmó la actualización del producto")
+
+    updated = odoo_get_product(product_id)
+
+    if updated.get("is_published"):
+        raise RuntimeError(
+            "Error de seguridad: el producto terminó publicado inesperadamente"
+        )
+
+    return {
+        "updated": True,
+        "product": updated,
+    }
+
+
 if __name__ == "__main__":
     mcp.run()
