@@ -2,10 +2,10 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 
-mcp = FastMCP("Odoo Commerce")
+mcp = MCPServer("Odoo Commerce")
 
 
 # El .env del perfil instalado estará dos niveles por encima de este archivo:
