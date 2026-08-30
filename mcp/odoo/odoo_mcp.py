@@ -301,5 +301,123 @@ def odoo_update_draft_product(
     }
 
 
+@mcp.tool()
+def odoo_set_stock(
+    product_id: int,
+    quantity: float,
+) -> dict[str, Any]:
+    """
+    Establece la cantidad física disponible de un producto en Odoo.
+
+    product_id es el ID de product.template.
+    La cantidad se aplica a la variante principal del producto
+    y al almacén principal de la compañía activa en Odoo.
+
+    Restricciones:
+- solo productos inventariables
+- cantidad entre 0 y 1000 unidades
+- no publica ni elimina productos
+    """
+
+    if quantity < 0:
+        raise ValueError("El stock no puede ser negativo")
+
+    if quantity > 1000:
+        raise ValueError("El stock máximo permitido por esta herramienta es 1000")
+
+    products = odoo_post(
+        "product.template",
+        "search_read",
+        {
+            "domain": [["id", "=", product_id]],
+            "fields": [
+                "name",
+                "product_variant_id",
+                "is_storable",
+                "qty_available",
+            ],
+            "limit": 1,
+        },
+    )
+
+    if not products:
+        raise ValueError(f"No existe el producto con ID {product_id}")
+
+    product = products[0]
+
+    if not product.get("is_storable"):
+        raise RuntimeError(
+            "El producto no tiene activado el seguimiento de inventario"
+        )
+
+    variant = product.get("product_variant_id")
+
+    if not variant:
+        raise RuntimeError("El producto no tiene una variante asociada")
+
+    variant_id = variant[0]
+
+    warehouses = odoo_post(
+        "stock.warehouse",
+        "search_read",
+        {
+            "domain": [],
+            "fields": ["name", "code", "lot_stock_id"],
+            "limit": 2,
+        },
+    )
+
+    if len(warehouses) != 1:
+        raise RuntimeError(
+            "Se esperaba exactamente un almacén visible para el bot"
+        )
+
+    warehouse = warehouses[0]
+
+    result = odoo_post(
+        "product.product",
+        "write",
+        {
+            "ids": [variant_id],
+            "vals": {
+                "qty_available": float(quantity),
+            },
+        },
+    )
+
+    if result is not True:
+        raise RuntimeError("Odoo no confirmó la actualización del stock")
+
+    updated = odoo_post(
+        "product.product",
+        "search_read",
+        {
+            "domain": [["id", "=", variant_id]],
+            "fields": [
+                "name",
+                "default_code",
+                "qty_available",
+                "free_qty",
+                "virtual_available",
+            ],
+            "limit": 1,
+        },
+    )
+
+    if not updated:
+        raise RuntimeError("No se pudo verificar el stock actualizado")
+
+    return {
+        "updated": True,
+        "warehouse": {
+            "id": warehouse["id"],
+            "name": warehouse["name"],
+            "code": warehouse["code"],
+            "stock_location": warehouse["lot_stock_id"],
+        },
+        "product": updated[0],
+    }
+
+
 if __name__ == "__main__":
     mcp.run()
