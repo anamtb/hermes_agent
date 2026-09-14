@@ -1,5 +1,8 @@
 import base64
+import html
 import ipaddress
+import json
+import re
 import socket
 from pathlib import Path
 from typing import Any
@@ -16,6 +19,70 @@ mcp = MCPServer("Odoo Commerce")
 # .../commerce-test/.env
 PROFILE_DIR = Path(__file__).resolve().parents[2]
 ENV_FILE = PROFILE_DIR / ".env"
+
+
+def _env_value(name: str) -> str:
+    for raw_line in ENV_FILE.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+
+        if key.strip() == name:
+            return value.strip().strip('"').strip("'")
+
+    raise RuntimeError(f"Falta {name} en .env")
+
+
+def _extract_product_jsonld(page_html: str) -> dict[str, Any] | None:
+    scripts = re.findall(
+        r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>'
+        r'(.*?)</script>',
+        page_html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+    def find_product(obj: Any) -> dict[str, Any] | None:
+        if isinstance(obj, dict):
+            object_type = obj.get("@type")
+
+            if object_type == "Product":
+                return obj
+
+            if isinstance(object_type, list) and "Product" in object_type:
+                return obj
+
+            graph = obj.get("@graph")
+
+            if isinstance(graph, list):
+                for item in graph:
+                    found = find_product(item)
+                    if found:
+                        return found
+
+        elif isinstance(obj, list):
+            for item in obj:
+                found = find_product(item)
+                if found:
+                    return found
+
+        return None
+
+    for raw in scripts:
+        try:
+            decoded = html.unescape(raw).strip()
+            data = json.loads(decoded)
+        except Exception:
+            continue
+
+        found = find_product(data)
+
+        if found:
+            return found
+
+    return None
 
 
 def load_odoo_config() -> tuple[str, str]:
@@ -782,6 +849,220 @@ def odoo_set_product_image_from_url(
         "content_type": content_type,
         "image_size_bytes": len(image_bytes),
         "product": updated,
+    }
+
+
+@mcp.tool()
+def odoo_get_commerce_product(
+    product_id: int,
+) -> dict[str, Any]:
+    """
+    Obtiene los datos comerciales necesarios para publicar un producto
+    en marketplaces.
+
+    Incluye:
+    - ficha Odoo
+    - stock real
+    - URL pública
+    - URL pública de imagen
+    - precio/moneda/disponibilidad observados en la página pública
+      mediante JSON-LD cuando estén disponibles
+
+    Herramienta de solo lectura.
+    """
+
+    products = odoo_post(
+        "product.template",
+        "search_read",
+        {
+            "domain": [["id", "=", product_id]],
+            "fields": [
+                "name",
+                "default_code",
+                "description_sale",
+                "list_price",
+                "website_url",
+                "is_published",
+                "product_variant_id",
+                "image_1920",
+            ],
+            "limit": 1,
+        },
+    )
+
+    if not products:
+        raise ValueError(
+            f"No existe el producto con ID {product_id}"
+        )
+
+    product = products[0]
+
+    variant = product.get("product_variant_id")
+
+    if not variant:
+        raise RuntimeError(
+            "El producto no tiene variante asociada"
+        )
+
+    variant_id = variant[0]
+
+    variants = odoo_post(
+        "product.product",
+        "search_read",
+        {
+            "domain": [["id", "=", variant_id]],
+            "fields": [
+                "name",
+                "default_code",
+                "qty_available",
+                "free_qty",
+                "virtual_available",
+                "is_storable",
+            ],
+            "limit": 1,
+        },
+    )
+
+    if not variants:
+        raise RuntimeError(
+            "No se pudo leer la variante del producto"
+        )
+
+    variant_data = variants[0]
+
+    base_url = _env_value("ODOO_BASE_URL").rstrip("/")
+
+    relative_url = product.get("website_url") or ""
+
+    public_url = (
+        urljoin(base_url + "/", relative_url.lstrip("/"))
+        if relative_url
+        else None
+    )
+
+    image_url = (
+        f"{base_url}/web/image/"
+        f"product.template/{product_id}/image_1920"
+    )
+
+    has_image = bool(product.get("image_1920"))
+
+    public_page = {
+        "status_code": None,
+        "final_url": None,
+        "jsonld_product_found": False,
+        "price": None,
+        "currency": None,
+        "availability": None,
+        "image": None,
+    }
+
+    image_check = {
+        "status_code": None,
+        "content_type": None,
+        "public": False,
+    }
+
+    with httpx.Client(
+        timeout=20.0,
+        follow_redirects=True,
+        headers={
+            "User-Agent": "Hermes-Commerce-Agent/1.0",
+        },
+    ) as client:
+
+        if public_url and product.get("is_published"):
+            response = client.get(public_url)
+
+            public_page["status_code"] = response.status_code
+            public_page["final_url"] = str(response.url)
+
+            if response.status_code == 200:
+                structured = _extract_product_jsonld(
+                    response.text
+                )
+
+                if structured:
+                    public_page[
+                        "jsonld_product_found"
+                    ] = True
+
+                    offers = structured.get("offers")
+
+                    if isinstance(offers, list):
+                        offers = offers[0] if offers else {}
+
+                    if isinstance(offers, dict):
+                        public_page["price"] = offers.get(
+                            "price"
+                        )
+                        public_page["currency"] = offers.get(
+                            "priceCurrency"
+                        )
+                        public_page[
+                            "availability"
+                        ] = offers.get("availability")
+
+                    image = structured.get("image")
+
+                    if isinstance(image, list):
+                        image = image[0] if image else None
+
+                    if isinstance(image, dict):
+                        image = (
+                            image.get("url")
+                            or image.get("contentUrl")
+                        )
+
+                    public_page["image"] = image
+
+        if has_image:
+            image_response = client.get(image_url)
+
+            image_check["status_code"] = (
+                image_response.status_code
+            )
+
+            image_check["content_type"] = (
+                image_response.headers
+                .get("content-type", "")
+                .split(";", 1)[0]
+            )
+
+            image_check["public"] = (
+                image_response.status_code == 200
+                and image_check["content_type"].startswith(
+                    "image/"
+                )
+            )
+
+    return {
+        "product_id": product_id,
+        "variant_id": variant_id,
+        "name": product.get("name"),
+        "default_code": product.get("default_code"),
+        "description_sale": product.get(
+            "description_sale"
+        ),
+        "list_price": product.get("list_price"),
+        "is_published": product.get("is_published"),
+        "stock": {
+            "qty_available": variant_data.get(
+                "qty_available"
+            ),
+            "free_qty": variant_data.get("free_qty"),
+            "virtual_available": variant_data.get(
+                "virtual_available"
+            ),
+            "is_storable": variant_data.get(
+                "is_storable"
+            ),
+        },
+        "public_url": public_url,
+        "image_url": image_url,
+        "has_image": has_image,
+        "image_check": image_check,
+        "public_page": public_page,
     }
 
 
