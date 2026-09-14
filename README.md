@@ -1,5 +1,8 @@
 # Hermes Commerce Agent
 
+La explicación visual completa de la arquitectura y del recorrido de un
+producto está en [`docs/hermes-commerce-guide/`](docs/hermes-commerce-guide/README.md).
+
 Distribución reutilizable de Hermes Agent para llevar productos desde la
 investigación comercial hasta Odoo Ecommerce y Google Merchant con controles de
 aprobación explícitos.

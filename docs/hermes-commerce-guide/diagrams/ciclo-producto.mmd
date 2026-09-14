@@ -1,0 +1,40 @@
+flowchart TD
+    A[El usuario presenta un producto] --> B[Descubrimiento e identidad]
+    B --> C{¿Fabricante, modelo y variante exactos?}
+    C -- No --> D[Solicitar o investigar datos faltantes]
+    D --> B
+    C -- Sí --> E[Crear o actualizar el dossier YAML]
+
+    E --> F[Consultar proveedor, coste y stock]
+    E --> G[Investigar mercado y competidores]
+    F --> H[Calcular escenarios de precio]
+    G --> H
+
+    H --> I{{Puerta 1<br/>Aprobación del precio}}
+    I -- Revisar --> H
+    I -- Aprobado --> J[Crear o actualizar borrador en Odoo]
+
+    J --> K[Seleccionar y aprobar imagen]
+    K --> L[Validar ficha, SKU, coste, stock e impuestos]
+    L --> M{{Puerta 2<br/>Aprobación de publicación en Odoo}}
+    M -- Corregir --> J
+    M -- Aprobado --> N[Publicar en Odoo]
+
+    N --> O[Leer la landing pública y su JSON-LD]
+    O --> P{¿Precio, moneda, disponibilidad<br/>e imagen son correctos?}
+    P -- No --> Q[Detener y corregir Odoo]
+    Q --> J
+    P -- Sí --> R[Preflight de Google Merchant]
+
+    R --> S{¿Payload válido y coherente<br/>con la landing?}
+    S -- No --> Q
+    S -- Sí --> T{{Puerta 3<br/>Aprobación de envío a Merchant}}
+    T -- No --> R
+    T -- Aprobado --> V[Enviar productInput]
+
+    V --> W[Consultar procesamiento e incidencias]
+    W --> X{Resultado por destino}
+    X --> X1[Aprobado]
+    X --> X2[Pendiente]
+    X --> X3[Rechazado o con incidencias]
+    X3 --> Q

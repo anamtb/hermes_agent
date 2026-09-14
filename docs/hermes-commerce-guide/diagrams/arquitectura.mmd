@@ -1,0 +1,33 @@
+flowchart LR
+    U[Usuario] --> H[Hermes Commerce Agent]
+
+    subgraph Cerebro_del_agente[Comportamiento y proceso]
+        S[SOUL.md<br/>Reglas y límites]
+        W[commerce-product-launch<br/>Flujo de trabajo]
+        Y[knowledge/products<br/>Un dossier YAML por producto]
+    end
+
+    H --> S
+    H --> W
+    W <--> Y
+
+    subgraph Herramientas_MCP[Herramientas especializadas]
+        P[Commerce Pricing<br/>Precios, costes y márgenes]
+        O[Odoo MCP<br/>Catálogo, stock, coste e imagen]
+        G[Google Merchant MCP<br/>Preflight, envío y estado]
+    end
+
+    W --> P
+    W --> O
+    W --> G
+
+    O <--> OD[(Odoo)]
+    O --> LP[Página pública de Odoo]
+    LP --> G
+    G <--> GM[(Google Merchant Center)]
+
+    CFG[config.yaml y mcp.json<br/>Conexiones portables] --> P
+    CFG --> O
+    CFG --> G
+    ENV[.env local<br/>Credenciales e IDs privados] --> O
+    ENV --> G

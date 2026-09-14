@@ -1,0 +1,14 @@
+flowchart TD
+    I[Identidad, especificaciones,<br/>fuentes y decisiones] --> Y[(Dossier YAML)]
+    C[Catálogo, coste, proveedor,<br/>stock e impuestos] --> O[(Odoo)]
+    V[Precio, moneda, disponibilidad<br/>e imagen visibles] --> L[(Landing pública)]
+    E[Estado por destino<br/>e incidencias] --> G[(Google Merchant)]
+
+    Y --> H[Hermes compone la evidencia]
+    O --> H
+    L --> H
+    G --> H
+
+    H --> R{¿Hay conflicto?}
+    R -- Sí --> S[Detener, explicar y corregir<br/>en la fuente responsable]
+    R -- No --> A[Continuar al siguiente estado]
