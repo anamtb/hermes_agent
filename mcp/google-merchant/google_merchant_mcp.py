@@ -27,6 +27,46 @@ GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 MERCHANT_API_BASE = "https://merchantapi.googleapis.com"
 
 
+class MerchantApiError(RuntimeError):
+    """Controlled, sanitized failure returned by the Merchant API client."""
+
+    def __init__(
+        self,
+        *,
+        category: str,
+        message: str,
+        status_code: int | None = None,
+        google_status: str | None = None,
+        google_message: str | None = None,
+        details: Any = None,
+    ) -> None:
+        super().__init__(message)
+        self.category = category
+        self.status_code = status_code
+        self.google_status = google_status
+        self.google_message = google_message
+        self.details = details
+
+    def as_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "type": "merchant_api_error",
+            "category": self.category,
+            "status_code": self.status_code,
+            "message": str(self),
+        }
+
+        if self.google_status:
+            result["google_status"] = self.google_status
+
+        if self.google_message:
+            result["google_message"] = self.google_message
+
+        if self.details:
+            result["details"] = self.details
+
+        return result
+
+
 def _load_env() -> dict[str, str]:
     values: dict[str, str] = {}
 
@@ -116,35 +156,157 @@ def _merchant_get(
     return response.json()
 
 
+def _merchant_error_category(status_code: int) -> tuple[str, str]:
+    if status_code == 400:
+        return "invalid_request", "Google rechazó el payload del producto"
+    if status_code == 401:
+        return "oauth_authentication", "El token OAuth no es válido o ha caducado"
+    if status_code == 403:
+        return "permission_denied", "La cuenta OAuth no tiene permisos suficientes"
+    if status_code == 404:
+        return "not_found", "No existe la cuenta, fuente de datos o endpoint indicado"
+    if status_code == 409:
+        return "conflict", "Google detectó un conflicto al guardar el producto"
+    if status_code == 429:
+        return "rate_limited", "Google ha limitado temporalmente las solicitudes"
+    if status_code >= 500:
+        return (
+            "temporary_google_error",
+            "Google Merchant no está disponible temporalmente",
+        )
+
+    return "unexpected_http_status", "Google devolvió un estado HTTP inesperado"
+
+
+def _sanitize_external_data(value: Any, key: str = "") -> Any:
+    sensitive_keys = {
+        "accesstoken",
+        "authorization",
+        "clientsecret",
+        "idtoken",
+        "refreshtoken",
+        "apikey",
+    }
+
+    normalized_key = re.sub(r"[^a-z0-9]", "", key.lower())
+
+    if normalized_key in sensitive_keys:
+        return "[REDACTED]"
+
+    if isinstance(value, dict):
+        return {
+            str(item_key): _sanitize_external_data(item_value, str(item_key))
+            for item_key, item_value in value.items()
+        }
+
+    if isinstance(value, list):
+        return [_sanitize_external_data(item) for item in value]
+
+    if isinstance(value, str):
+        return _safe_exception_message(RuntimeError(value))
+
+    return value
+
+
+def _merchant_api_error(response: httpx.Response) -> MerchantApiError:
+    category, message = _merchant_error_category(response.status_code)
+    google_status = None
+    google_message = None
+    details = None
+
+    try:
+        response_data = response.json()
+    except ValueError:
+        response_text = response.text.strip()
+        if response_text:
+            google_message = _safe_exception_message(
+                RuntimeError(response_text)
+            )
+    else:
+        error_data = (
+            response_data.get("error", response_data)
+            if isinstance(response_data, dict)
+            else response_data
+        )
+
+        if isinstance(error_data, dict):
+            raw_status = error_data.get("status")
+            raw_message = error_data.get("message")
+            raw_details = error_data.get("details")
+
+            if isinstance(raw_status, str):
+                google_status = _safe_exception_message(
+                    RuntimeError(raw_status)
+                )
+
+            if isinstance(raw_message, str):
+                google_message = _safe_exception_message(
+                    RuntimeError(raw_message)
+                )
+
+            if raw_details:
+                details = _sanitize_external_data(raw_details)
+
+    return MerchantApiError(
+        category=category,
+        message=message,
+        status_code=response.status_code,
+        google_status=google_status,
+        google_message=google_message,
+        details=details,
+    )
+
+
 def _merchant_post(
     path: str,
     *,
     params: dict[str, Any] | None = None,
     json_data: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    token = _get_access_token()
+    try:
+        token = _get_access_token()
+    except Exception as exc:
+        raise MerchantApiError(
+            category="oauth_token",
+            message="No se pudo obtener el token OAuth de Google",
+            google_message=_safe_exception_message(exc),
+        ) from exc
 
     url = f"{MERCHANT_API_BASE}{path}"
 
-    with httpx.Client(timeout=30.0) as client:
-        response = client.post(
-            url,
-            params=params,
-            json=json_data,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-            },
-        )
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            response = client.post(
+                url,
+                params=params,
+                json=json_data,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
+            )
+    except httpx.RequestError as exc:
+        raise MerchantApiError(
+            category="network_error",
+            message="No se pudo conectar con Google Merchant API",
+            google_message=_safe_exception_message(exc),
+        ) from exc
 
-    if response.status_code >= 400:
-        raise RuntimeError(
-            f"Merchant API error {response.status_code}: "
-            f"{response.text[:1500]}"
-        )
+    if not 200 <= response.status_code < 300:
+        raise _merchant_api_error(response)
 
-    return response.json()
+    try:
+        return response.json()
+    except ValueError as exc:
+        if not response.content:
+            return {}
+
+        raise MerchantApiError(
+            category="invalid_response",
+            message="Google devolvió una respuesta de éxito no válida",
+            status_code=response.status_code,
+        ) from exc
 
 
 def _configured_account_id() -> str:
@@ -313,6 +475,22 @@ def _unexpected_preflight_result(
             "message": _safe_exception_message(exc),
         },
     )
+
+
+def _upsert_error_result(
+    error: dict[str, Any],
+    *,
+    preflight: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return a stable upsert failure without leaking an MCP exception."""
+
+    return {
+        "ok": False,
+        "submitted": False,
+        "error": error,
+        "preflight": preflight,
+        "product_input": None,
+    }
 
 
 def _product_preflight(
@@ -728,18 +906,18 @@ def google_merchant_upsert_product(
     link: str,
     image_link: str,
     price_eur: float,
+    currency_code: str,
     availability: str,
+    condition: str,
     brand: str,
     mpn: str,
-    confirmation: str = "",
+    content_language: str,
+    feed_label: str,
+    public_price: float,
+    public_currency: str,
+    public_availability: str,
+    confirmation: str,
     gtin: str | None = None,
-    currency_code: str = "",
-    content_language: str = "",
-    feed_label: str = "",
-    condition: str = "",
-    public_price: float | None = None,
-    public_currency: str = "",
-    public_availability: str = "",
 ) -> dict[str, Any]:
     """Crea o actualiza un producto tras preflight y aprobación explícita.
 
@@ -748,54 +926,106 @@ def google_merchant_upsert_product(
     o proporcionarse como datos verificados, nunca inferirse del usuario final.
     """
 
-    require_confirmation(
-        confirmation,
-        "PUBLICAR_EN_GOOGLE_MERCHANT",
-    )
+    try:
+        require_confirmation(
+            confirmation,
+            "PUBLICAR_EN_GOOGLE_MERCHANT",
+        )
+    except RuntimeError as exc:
+        return _upsert_error_result(
+            {
+                "type": "confirmation_required",
+                "category": "confirmation_required",
+                "status_code": None,
+                "message": _safe_exception_message(exc),
+            }
+        )
 
-    preflight = _product_preflight(
-        data_source_id=data_source_id,
-        offer_id=offer_id,
-        title=title,
-        description=description,
-        link=link,
-        image_link=image_link,
-        price_eur=price_eur,
-        currency_code=currency_code,
-        availability=availability,
-        condition=condition,
-        brand=brand,
-        mpn=mpn,
-        content_language=content_language,
-        feed_label=feed_label,
-        gtin=gtin,
-        public_price=public_price,
-        public_currency=public_currency,
-        public_availability=public_availability,
-    )
+    try:
+        preflight = _product_preflight(
+            data_source_id=data_source_id,
+            offer_id=offer_id,
+            title=title,
+            description=description,
+            link=link,
+            image_link=image_link,
+            price_eur=price_eur,
+            currency_code=currency_code,
+            availability=availability,
+            condition=condition,
+            brand=brand,
+            mpn=mpn,
+            content_language=content_language,
+            feed_label=feed_label,
+            gtin=gtin,
+            public_price=public_price,
+            public_currency=public_currency,
+            public_availability=public_availability,
+        )
+    except Exception as exc:
+        return _upsert_error_result(
+            {
+                "type": "internal_error",
+                "category": "preflight_exception",
+                "status_code": None,
+                "message": "Error interno inesperado durante el preflight",
+                "diagnostic": {
+                    "exception_type": type(exc).__name__,
+                    "message": _safe_exception_message(exc),
+                },
+            }
+        )
 
     if not preflight["ready"]:
-        raise RuntimeError(
-            "Publicación bloqueada por preflight: "
-            + "; ".join(preflight["blockers"])
+        return _upsert_error_result(
+            {
+                "type": "preflight_failed",
+                "category": "validation",
+                "status_code": None,
+                "message": "Publicación bloqueada por preflight",
+                "details": preflight["blockers"],
+            },
+            preflight=preflight,
         )
 
     submission = preflight["submission"]
     account_id = submission["account_id"]
 
-    result = _merchant_post(
-        (
-            f"/products/v1/accounts/"
-            f"{account_id}/productInputs:insert"
-        ),
-        params={
-            "dataSource": submission["data_source"],
-        },
-        json_data=submission["payload"],
-    )
+    try:
+        result = _merchant_post(
+            (
+                f"/products/v1/accounts/"
+                f"{account_id}/productInputs:insert"
+            ),
+            params={
+                "dataSource": submission["data_source"],
+            },
+            json_data=submission["payload"],
+        )
+    except MerchantApiError as exc:
+        return _upsert_error_result(
+            exc.as_dict(),
+            preflight=preflight,
+        )
+    except Exception as exc:
+        return _upsert_error_result(
+            {
+                "type": "internal_error",
+                "category": "unexpected_exception",
+                "status_code": None,
+                "message": "Error interno inesperado durante el upsert",
+                "diagnostic": {
+                    "exception_type": type(exc).__name__,
+                    "message": _safe_exception_message(exc),
+                },
+            },
+            preflight=preflight,
+        )
 
     return {
+        "ok": True,
         "submitted": True,
+        "error": None,
         "account_id": account_id,
         "data_source": submission["data_source"],
         "offer_id": submission["offer_id"],

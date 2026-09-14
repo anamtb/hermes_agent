@@ -123,6 +123,7 @@ class GoogleMerchantPreflightRegressionTests(unittest.TestCase):
             confirmation="PUBLICAR_EN_GOOGLE_MERCHANT",
         )
 
+        self.assertTrue(result["ok"])
         self.assertTrue(result["preflight"]["ok"])
         merchant_post.assert_called_once()
         call = merchant_post.call_args
@@ -140,12 +141,16 @@ class GoogleMerchantPreflightRegressionTests(unittest.TestCase):
         _check_public_url,
         merchant_post,
     ) -> None:
-        with self.assertRaisesRegex(RuntimeError, "precio"):
-            MERCHANT.google_merchant_upsert_product(
-                **real_product(price_eur=548.23),
-                confirmation="PUBLICAR_EN_GOOGLE_MERCHANT",
-            )
+        result = MERCHANT.google_merchant_upsert_product(
+            **real_product(price_eur=548.23),
+            confirmation="PUBLICAR_EN_GOOGLE_MERCHANT",
+        )
 
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["type"], "preflight_failed")
+        self.assertTrue(
+            any("precio" in detail for detail in result["error"]["details"])
+        )
         merchant_post.assert_not_called()
 
     @patch.object(MERCHANT, "_check_public_url", side_effect=successful_url_check)
