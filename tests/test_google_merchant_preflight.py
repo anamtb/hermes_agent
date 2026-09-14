@@ -109,6 +109,28 @@ class GoogleMerchantPreflightRegressionTests(unittest.TestCase):
         merchant_get.assert_not_called()
         merchant_post.assert_not_called()
 
+    @patch.object(MERCHANT, "_merchant_post", return_value={"name": "dry-run"})
+    @patch.object(MERCHANT, "_check_public_url", side_effect=successful_url_check)
+    @patch.object(MERCHANT, "_configured_account_id", return_value="123456")
+    def test_upsert_uses_preflight_price_payload_without_real_publication(
+        self,
+        _configured_account,
+        _check_public_url,
+        merchant_post,
+    ) -> None:
+        result = MERCHANT.google_merchant_upsert_product(
+            **real_product(),
+            confirmation="PUBLICAR_EN_GOOGLE_MERCHANT",
+        )
+
+        self.assertTrue(result["preflight"]["ok"])
+        merchant_post.assert_called_once()
+        call = merchant_post.call_args
+        self.assertEqual(
+            call.kwargs["json_data"]["productAttributes"]["price"],
+            {"amountMicros": "18997000000", "currencyCode": "EUR"},
+        )
+
     @patch.object(MERCHANT, "_check_public_url", side_effect=successful_url_check)
     @patch.object(MERCHANT, "_configured_account_id", return_value="123456")
     def test_supported_availability_spellings_are_normalized(
@@ -232,6 +254,33 @@ class GoogleMerchantPreflightRegressionTests(unittest.TestCase):
         )
         self.assertIn("[REDACTED]", result["diagnostic"]["message"])
         self.assertNotIn("secret-value", result["diagnostic"]["message"])
+
+
+class GoogleMerchantMcpTransportRegressionTests(
+    unittest.IsolatedAsyncioTestCase
+):
+    @patch.object(MERCHANT, "_merchant_post")
+    @patch.object(MERCHANT, "_check_public_url", side_effect=successful_url_check)
+    @patch.object(MERCHANT, "_configured_account_id", return_value="123456")
+    async def test_mcp_transport_preserves_large_price(
+        self,
+        _configured_account,
+        _check_public_url,
+        merchant_post,
+    ) -> None:
+        result = await MERCHANT.mcp.call_tool(
+            "google_merchant_preflight_product",
+            real_product(),
+        )
+
+        preflight = result.structured_content
+        self.assertTrue(preflight["ok"])
+        self.assertEqual(preflight["errors"], [])
+        self.assertEqual(
+            preflight["normalized"]["payload"]["productAttributes"]["price"],
+            {"amountMicros": "18997000000", "currencyCode": "EUR"},
+        )
+        merchant_post.assert_not_called()
 
 
 if __name__ == "__main__":

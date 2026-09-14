@@ -9,6 +9,8 @@ from urllib.parse import quote, urlparse
 
 
 GTIN_LENGTHS = {8, 12, 13, 14}
+MICROS_PER_CURRENCY_UNIT = Decimal("1000000")
+AMOUNT_MICROS_QUANTUM = Decimal("1")
 AVAILABILITY_ALIASES = {
     "instock": "IN_STOCK",
     "outofstock": "OUT_OF_STOCK",
@@ -120,6 +122,28 @@ def product_resource_id(
     return quote("~".join(parts), safe="~")
 
 
+def price_to_amount_micros(price: Decimal | int | float | str) -> int:
+    """Convert a currency-unit price to Merchant API micros deterministically."""
+
+    try:
+        decimal_price = Decimal(str(price))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ValueError("El precio debe ser numérico") from exc
+
+    if not decimal_price.is_finite() or decimal_price <= 0:
+        raise ValueError("El precio debe ser mayor que cero")
+
+    try:
+        return int(
+            (decimal_price * MICROS_PER_CURRENCY_UNIT).quantize(
+                AMOUNT_MICROS_QUANTUM,
+                rounding=ROUND_HALF_UP,
+            )
+        )
+    except InvalidOperation as exc:
+        raise ValueError("El precio no se puede convertir a micros") from exc
+
+
 def build_product_submission(
     *,
     account_id: str,
@@ -129,7 +153,7 @@ def build_product_submission(
     description: str,
     link: str,
     image_link: str,
-    price: float,
+    price: Decimal | int | float | str,
     currency_code: str,
     availability: str,
     condition: str,
@@ -175,20 +199,7 @@ def build_product_submission(
 
     normalized_availability = normalize_availability(availability)
 
-    try:
-        decimal_price = Decimal(str(price))
-    except (InvalidOperation, ValueError) as exc:
-        raise ValueError("El precio debe ser numérico") from exc
-
-    if not decimal_price.is_finite() or decimal_price <= 0:
-        raise ValueError("El precio debe ser mayor que cero")
-
-    amount_micros = int(
-        (decimal_price * Decimal("1000000")).quantize(
-            Decimal("1"),
-            rounding=ROUND_HALF_UP,
-        )
-    )
+    amount_micros = price_to_amount_micros(price)
 
     attributes: dict[str, Any] = {
         "title": required_text["title"],

@@ -108,6 +108,21 @@ class MerchantProductValidationTests(unittest.TestCase):
             float_result["payload"]["productAttributes"]["price"],
         )
 
+    def test_price_to_amount_micros_regressions(self) -> None:
+        cases = (
+            (18997, 18_997_000_000),
+            (15700, 15_700_000_000),
+            (548.23, 548_230_000),
+            (0.01, 10_000),
+        )
+
+        for price, expected_amount_micros in cases:
+            with self.subTest(price=price):
+                self.assertEqual(
+                    MODULE.price_to_amount_micros(price),
+                    expected_amount_micros,
+                )
+
     def test_currency_and_urls_are_validated(self) -> None:
         with self.assertRaises(ValueError):
             valid_submission(currency_code="EU")
