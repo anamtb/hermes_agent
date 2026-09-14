@@ -103,6 +103,37 @@ def _merchant_get(
     return response.json()
 
 
+def _merchant_post(
+    path: str,
+    *,
+    params: dict[str, Any] | None = None,
+    json_data: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    token = _get_access_token()
+
+    url = f"{MERCHANT_API_BASE}{path}"
+
+    with httpx.Client(timeout=30.0) as client:
+        response = client.post(
+            url,
+            params=params,
+            json=json_data,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            },
+        )
+
+    if response.status_code >= 400:
+        raise RuntimeError(
+            f"Merchant API error {response.status_code}: "
+            f"{response.text[:1500]}"
+        )
+
+    return response.json()
+
+
 @mcp.tool()
 def google_merchant_list_accounts() -> dict[str, Any]:
     """
@@ -215,6 +246,145 @@ def google_merchant_list_data_sources(
         "count": len(sources),
         "data_sources": sources,
         "next_page_token": result.get("nextPageToken"),
+    }
+
+
+@mcp.tool()
+def google_merchant_upsert_product(
+    data_source_id: str,
+    offer_id: str,
+    title: str,
+    description: str,
+    link: str,
+    image_link: str,
+    price_eur: float,
+    availability: str,
+    brand: str,
+    mpn: str,
+    confirmation: str = "",
+    gtin: str | None = None,
+) -> dict[str, Any]:
+    """
+    Crea o actualiza un producto en Google Merchant Center.
+
+    Usa la cuenta configurada en GOOGLE_MERCHANT_ACCOUNT_ID.
+
+    Requiere confirmación explícita:
+    confirmation="PUBLICAR_EN_GOOGLE_MERCHANT"
+
+    availability:
+    IN_STOCK
+    OUT_OF_STOCK
+    PREORDER
+    BACKORDER
+    """
+
+    if confirmation != "PUBLICAR_EN_GOOGLE_MERCHANT":
+        raise RuntimeError(
+            "Publicación bloqueada. "
+            "Se requiere confirmación explícita."
+        )
+
+    account_id = _required_secret(
+        "GOOGLE_MERCHANT_ACCOUNT_ID"
+    ).strip()
+
+    if not account_id.isdigit():
+        raise ValueError(
+            "GOOGLE_MERCHANT_ACCOUNT_ID no es válido"
+        )
+
+    data_source_id = data_source_id.strip()
+
+    if not data_source_id.isdigit():
+        raise ValueError(
+            "data_source_id debe ser numérico"
+        )
+
+    offer_id = offer_id.strip()
+
+    if not offer_id:
+        raise ValueError("offer_id es obligatorio")
+
+    if price_eur <= 0:
+        raise ValueError(
+            "El precio debe ser mayor que cero"
+        )
+
+    allowed_availability = {
+        "IN_STOCK",
+        "OUT_OF_STOCK",
+        "PREORDER",
+        "BACKORDER",
+    }
+
+    availability = availability.strip().upper()
+
+    if availability not in allowed_availability:
+        raise ValueError(
+            "availability no es válido"
+        )
+
+    for field_name, url in {
+        "link": link,
+        "image_link": image_link,
+    }.items():
+        if not url.startswith("https://"):
+            raise ValueError(
+                f"{field_name} debe ser una URL HTTPS"
+            )
+
+    amount_micros = int(
+        round(price_eur * 1_000_000)
+    )
+
+    attributes: dict[str, Any] = {
+        "title": title.strip(),
+        "description": description.strip(),
+        "link": link.strip(),
+        "imageLink": image_link.strip(),
+        "availability": availability,
+        "condition": "NEW",
+        "brand": brand.strip(),
+        "mpn": mpn.strip(),
+        "price": {
+            "amountMicros": str(amount_micros),
+            "currencyCode": "EUR",
+        },
+    }
+
+    if gtin:
+        attributes["gtins"] = [gtin.strip()]
+
+    data_source_name = (
+        f"accounts/{account_id}/"
+        f"dataSources/{data_source_id}"
+    )
+
+    payload = {
+        "offerId": offer_id,
+        "contentLanguage": "es",
+        "feedLabel": "ES",
+        "productAttributes": attributes,
+    }
+
+    result = _merchant_post(
+        (
+            f"/products/v1/accounts/"
+            f"{account_id}/productInputs:insert"
+        ),
+        params={
+            "dataSource": data_source_name,
+        },
+        json_data=payload,
+    )
+
+    return {
+        "submitted": True,
+        "account_id": account_id,
+        "data_source": data_source_name,
+        "offer_id": offer_id,
+        "product_input": result,
     }
 
 
