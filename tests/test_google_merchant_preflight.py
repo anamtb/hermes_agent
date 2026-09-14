@@ -131,6 +131,23 @@ class GoogleMerchantPreflightRegressionTests(unittest.TestCase):
             {"amountMicros": "18997000000", "currencyCode": "EUR"},
         )
 
+    @patch.object(MERCHANT, "_merchant_post")
+    @patch.object(MERCHANT, "_check_public_url", side_effect=successful_url_check)
+    @patch.object(MERCHANT, "_configured_account_id", return_value="123456")
+    def test_upsert_blocks_548_23_when_landing_price_is_18997(
+        self,
+        _configured_account,
+        _check_public_url,
+        merchant_post,
+    ) -> None:
+        with self.assertRaisesRegex(RuntimeError, "precio"):
+            MERCHANT.google_merchant_upsert_product(
+                **real_product(price_eur=548.23),
+                confirmation="PUBLICAR_EN_GOOGLE_MERCHANT",
+            )
+
+        merchant_post.assert_not_called()
+
     @patch.object(MERCHANT, "_check_public_url", side_effect=successful_url_check)
     @patch.object(MERCHANT, "_configured_account_id", return_value="123456")
     def test_supported_availability_spellings_are_normalized(
