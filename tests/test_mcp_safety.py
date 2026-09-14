@@ -1,7 +1,9 @@
 import importlib.util
+import socket
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -61,6 +63,46 @@ class McpSafetyTests(unittest.TestCase):
     def test_merchant_url_rejects_loopback(self) -> None:
         with self.assertRaises(ValueError):
             MERCHANT._validate_public_https_url("https://127.0.0.1/product")
+
+    @patch.object(MERCHANT.socket, "getaddrinfo")
+    def test_merchant_url_rejects_private_dns_resolution(
+        self,
+        getaddrinfo,
+    ) -> None:
+        getaddrinfo.return_value = [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                ("10.10.0.5", 443),
+            )
+        ]
+
+        with self.assertRaises(ValueError):
+            MERCHANT._validate_public_https_url(
+                "https://shop.example/product"
+            )
+
+    @patch.object(MERCHANT, "_validate_public_https_url")
+    @patch.object(MERCHANT.httpx, "Client")
+    def test_merchant_httpx_failure_is_returned_as_url_check(
+        self,
+        client_class,
+        _validate_url,
+    ) -> None:
+        client = client_class.return_value.__enter__.return_value
+        client.stream.side_effect = MERCHANT.httpx.ConnectError(
+            "connection failed"
+        )
+
+        result = MERCHANT._check_public_url(
+            "https://shop.example/product",
+            require_image=False,
+        )
+
+        self.assertFalse(result["public"])
+        self.assertIn("connection failed", result["error"])
 
 
 if __name__ == "__main__":

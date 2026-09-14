@@ -5,22 +5,23 @@ from __future__ import annotations
 import re
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 
-ALLOWED_AVAILABILITY = {
-    "IN_STOCK",
-    "OUT_OF_STOCK",
-    "PREORDER",
-    "BACKORDER",
-}
-ALLOWED_CONDITIONS = {"NEW", "REFURBISHED", "USED"}
 GTIN_LENGTHS = {8, 12, 13, 14}
-PUBLIC_AVAILABILITY = {
+AVAILABILITY_ALIASES = {
     "instock": "IN_STOCK",
     "outofstock": "OUT_OF_STOCK",
     "preorder": "PREORDER",
     "backorder": "BACKORDER",
+}
+CONDITION_ALIASES = {
+    "new": "NEW",
+    "newcondition": "NEW",
+    "refurbished": "REFURBISHED",
+    "refurbishedcondition": "REFURBISHED",
+    "used": "USED",
+    "usedcondition": "USED",
 }
 
 
@@ -32,21 +33,76 @@ def require_confirmation(value: str, expected: str) -> None:
 
 
 def normalize_availability(value: str) -> str:
-    normalized = value.strip().upper()
+    normalized = value.strip().rstrip("/").rsplit("/", 1)[-1]
+    alias = re.sub(r"[^a-z0-9]", "", normalized.lower())
 
-    if normalized not in ALLOWED_AVAILABILITY:
+    if alias not in AVAILABILITY_ALIASES:
         raise ValueError("availability no es válido")
+
+    return AVAILABILITY_ALIASES[alias]
+
+
+def normalize_public_availability(value: str) -> str:
+    return normalize_availability(value)
+
+
+def normalize_condition(value: str) -> str:
+    normalized = value.strip().rstrip("/").rsplit("/", 1)[-1]
+    alias = re.sub(r"[^a-z0-9]", "", normalized.lower())
+
+    if alias not in CONDITION_ALIASES:
+        raise ValueError("condition no es válido")
+
+    return CONDITION_ALIASES[alias]
+
+
+def validate_gtin(value: str) -> str:
+    normalized = value.strip()
+
+    if not normalized.isdigit() or len(normalized) not in GTIN_LENGTHS:
+        raise ValueError("gtin debe tener 8, 12, 13 o 14 dígitos")
+
+    body = normalized[:-1]
+    weighted_sum = sum(
+        int(digit) * (3 if (len(body) - index) % 2 else 1)
+        for index, digit in enumerate(body)
+    )
+    expected_check_digit = (10 - weighted_sum % 10) % 10
+
+    if int(normalized[-1]) != expected_check_digit:
+        raise ValueError("gtin tiene un dígito de control no válido")
 
     return normalized
 
 
-def normalize_public_availability(value: str) -> str:
-    normalized = value.strip().rstrip("/").rsplit("/", 1)[-1].lower()
+def validate_https_url(value: str, field_name: str) -> str:
+    normalized = value.strip()
 
-    if normalized in PUBLIC_AVAILABILITY:
-        return PUBLIC_AVAILABILITY[normalized]
+    try:
+        parsed = urlparse(normalized)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError(f"{field_name} no es una URL válida") from exc
 
-    return normalize_availability(value)
+    if parsed.scheme.lower() != "https" or not parsed.hostname:
+        raise ValueError(f"{field_name} debe ser una URL HTTPS")
+
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError(f"{field_name} no puede incluir credenciales")
+
+    if port is not None and not 1 <= port <= 65535:
+        raise ValueError(f"{field_name} contiene un puerto no válido")
+
+    return normalized
+
+
+def normalize_currency_code(value: str, field_name: str = "currency_code") -> str:
+    normalized = value.strip().upper()
+
+    if not re.fullmatch(r"[A-Z]{3}", normalized):
+        raise ValueError(f"{field_name} debe ser un código ISO 4217")
+
+    return normalized
 
 
 def product_resource_id(
@@ -86,10 +142,10 @@ def build_product_submission(
     account_id = account_id.strip()
     data_source_id = data_source_id.strip()
     offer_id = offer_id.strip()
-    currency_code = currency_code.strip().upper()
+    currency_code = normalize_currency_code(currency_code)
     content_language = content_language.strip()
     feed_label = feed_label.strip()
-    condition = condition.strip().upper()
+    condition = normalize_condition(condition)
 
     if not account_id.isdigit():
         raise ValueError("GOOGLE_MERCHANT_ACCOUNT_ID no es válido")
@@ -111,21 +167,11 @@ def build_product_submission(
         if not value:
             raise ValueError(f"{name} es obligatorio")
 
-    for field_name, url in {
-        "link": link.strip(),
-        "image_link": image_link.strip(),
-    }.items():
-        if not url.startswith("https://"):
-            raise ValueError(f"{field_name} debe ser una URL HTTPS")
-
-    if not re.fullmatch(r"[A-Z]{3}", currency_code):
-        raise ValueError("currency_code debe ser un código ISO 4217")
+    normalized_link = validate_https_url(link, "link")
+    normalized_image_link = validate_https_url(image_link, "image_link")
 
     if not re.fullmatch(r"[A-Za-z]{2,3}(?:-[A-Za-z]{2})?", content_language):
         raise ValueError("content_language no es válido")
-
-    if condition not in ALLOWED_CONDITIONS:
-        raise ValueError("condition no es válido")
 
     normalized_availability = normalize_availability(availability)
 
@@ -147,8 +193,8 @@ def build_product_submission(
     attributes: dict[str, Any] = {
         "title": required_text["title"],
         "description": required_text["description"],
-        "link": link.strip(),
-        "imageLink": image_link.strip(),
+        "link": normalized_link,
+        "imageLink": normalized_image_link,
         "availability": normalized_availability,
         "condition": condition,
         "brand": required_text["brand"],
@@ -160,12 +206,7 @@ def build_product_submission(
     }
 
     if gtin is not None and gtin.strip():
-        normalized_gtin = gtin.strip()
-
-        if not normalized_gtin.isdigit() or len(normalized_gtin) not in GTIN_LENGTHS:
-            raise ValueError("gtin debe tener 8, 12, 13 o 14 dígitos")
-
-        attributes["gtins"] = [normalized_gtin]
+        attributes["gtins"] = [validate_gtin(gtin)]
 
     data_source_name = (
         f"accounts/{account_id}/dataSources/{data_source_id}"

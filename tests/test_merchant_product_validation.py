@@ -1,5 +1,6 @@
 import importlib.util
 import unittest
+from decimal import Decimal
 from pathlib import Path
 
 
@@ -66,17 +67,56 @@ class MerchantProductValidationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             valid_submission(gtin="not-a-gtin")
 
+        with self.assertRaises(ValueError):
+            valid_submission(gtin="8592978652884")
+
+    def test_valid_gtin_checksum_is_preserved(self) -> None:
+        result = valid_submission(gtin="8592978652883")
+
+        self.assertEqual(
+            result["payload"]["productAttributes"]["gtins"],
+            ["8592978652883"],
+        )
+
     def test_invalid_availability_is_rejected(self) -> None:
         with self.assertRaises(ValueError):
             valid_submission(availability="available")
 
     def test_schema_org_availability_is_normalized(self) -> None:
+        for value in ("in-stock", "IN_STOCK", "https://schema.org/InStock"):
+            with self.subTest(value=value):
+                self.assertEqual(
+                    MODULE.normalize_public_availability(value),
+                    "IN_STOCK",
+                )
+
+    def test_condition_is_normalized(self) -> None:
+        for value in ("new", "NEW", "https://schema.org/NewCondition"):
+            with self.subTest(value=value):
+                result = valid_submission(condition=value)
+                self.assertEqual(
+                    result["payload"]["productAttributes"]["condition"],
+                    "NEW",
+                )
+
+    def test_decimal_and_float_prices_build_the_same_payload(self) -> None:
+        decimal_result = valid_submission(price=Decimal("18997.00"))
+        float_result = valid_submission(price=18997.0)
+
         self.assertEqual(
-            MODULE.normalize_public_availability(
-                "https://schema.org/InStock"
-            ),
-            "IN_STOCK",
+            decimal_result["payload"]["productAttributes"]["price"],
+            float_result["payload"]["productAttributes"]["price"],
         )
+
+    def test_currency_and_urls_are_validated(self) -> None:
+        with self.assertRaises(ValueError):
+            valid_submission(currency_code="EU")
+
+        with self.assertRaises(ValueError):
+            valid_submission(link="https://user:password@example.com/product")
+
+        with self.assertRaises(ValueError):
+            valid_submission(image_link="http://example.com/image.jpg")
 
     def test_publication_confirmation_is_mandatory(self) -> None:
         with self.assertRaises(RuntimeError):

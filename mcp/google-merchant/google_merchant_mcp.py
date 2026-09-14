@@ -1,7 +1,8 @@
 import ipaddress
 import os
+import re
 import socket
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -11,6 +12,7 @@ from mcp.server import MCPServer
 
 from product_validation import (
     build_product_submission,
+    normalize_currency_code,
     normalize_public_availability,
     product_resource_id,
     require_confirmation,
@@ -250,6 +252,69 @@ def _check_public_url(
         }
 
 
+def _preflight_result(
+    *,
+    errors: list[str],
+    warnings: list[str],
+    submission: dict[str, Any] | None = None,
+    link_check: dict[str, Any] | None = None,
+    image_check: dict[str, Any] | None = None,
+    landing_observation: dict[str, Any] | None = None,
+    diagnostic: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Build the stable, JSON-serializable preflight response."""
+
+    result: dict[str, Any] = {
+        "ok": not errors,
+        "errors": errors,
+        "warnings": warnings,
+        "normalized": submission,
+        # Backwards-compatible fields used by google_merchant_upsert_product.
+        "ready": not errors,
+        "blockers": errors,
+        "submission": submission,
+        "link_check": link_check,
+        "image_check": image_check,
+        "landing_observation": landing_observation,
+        "published": False,
+    }
+
+    if diagnostic is not None:
+        result["diagnostic"] = diagnostic
+
+    return result
+
+
+def _safe_exception_message(exc: Exception) -> str:
+    message = str(exc) or "Sin mensaje de excepción"
+    patterns = (
+        r"(?i)(authorization\s*:\s*bearer\s+)[^\s,;]+",
+        r"(?i)((?:access|refresh|id)_token|client_secret|api_key)"
+        r"(\s*[=:]\s*)[^\s,;}]+",
+    )
+
+    for pattern in patterns:
+        message = re.sub(pattern, r"\1[REDACTED]", message)
+
+    return message[:1000]
+
+
+def _unexpected_preflight_result(
+    exc: Exception,
+    *,
+    stage: str,
+) -> dict[str, Any]:
+    return _preflight_result(
+        errors=[f"Error interno inesperado durante {stage}"],
+        warnings=[],
+        diagnostic={
+            "stage": stage,
+            "exception_type": type(exc).__name__,
+            "message": _safe_exception_message(exc),
+        },
+    )
+
+
 def _product_preflight(
     *,
     data_source_id: str,
@@ -271,67 +336,120 @@ def _product_preflight(
     public_currency: str,
     public_availability: str,
 ) -> dict[str, Any]:
-    submission = build_product_submission(
-        account_id=_configured_account_id(),
-        data_source_id=data_source_id,
-        offer_id=offer_id,
-        title=title,
-        description=description,
-        link=link,
-        image_link=image_link,
-        price=price_eur,
-        currency_code=currency_code,
-        availability=availability,
-        condition=condition,
-        brand=brand,
-        mpn=mpn,
-        content_language=content_language,
-        feed_label=feed_label,
-        gtin=gtin,
-    )
+    errors: list[str] = []
+    warnings: list[str] = []
+    landing_observation = {
+        "price": public_price,
+        "currency": public_currency or None,
+        "availability": public_availability or None,
+    }
+
+    try:
+        account_id = _configured_account_id()
+    except (RuntimeError, ValueError) as exc:
+        errors.append(str(exc))
+        return _preflight_result(
+            errors=errors,
+            warnings=warnings,
+            landing_observation=landing_observation,
+        )
+
+    try:
+        submission = build_product_submission(
+            account_id=account_id,
+            data_source_id=data_source_id,
+            offer_id=offer_id,
+            title=title,
+            description=description,
+            link=link,
+            image_link=image_link,
+            price=price_eur,
+            currency_code=currency_code,
+            availability=availability,
+            condition=condition,
+            brand=brand,
+            mpn=mpn,
+            content_language=content_language,
+            feed_label=feed_label,
+            gtin=gtin,
+        )
+    except ValueError as exc:
+        errors.append(str(exc))
+        return _preflight_result(
+            errors=errors,
+            warnings=warnings,
+            landing_observation=landing_observation,
+        )
 
     link_check = _check_public_url(link, require_image=False)
     image_check = _check_public_url(image_link, require_image=True)
-    blockers = []
 
     if not link_check["public"]:
-        blockers.append("La URL pública del producto no responde con HTTP 200")
+        detail = link_check.get("error")
+        errors.append(
+            "La URL pública del producto no responde con HTTP 200"
+            + (f": {detail}" if detail else "")
+        )
 
     if not image_check["public"]:
-        blockers.append(
+        detail = image_check.get("error")
+        errors.append(
             "La imagen no responde públicamente como contenido image/*"
+            + (f": {detail}" if detail else "")
         )
 
     if public_price is None:
-        blockers.append("Falta el precio observado en la landing pública")
+        errors.append("Falta el precio observado en la landing pública")
     else:
         try:
-            submitted_price = Decimal(str(price_eur)).quantize(
-                Decimal("0.01")
+            submitted_decimal = Decimal(str(price_eur))
+            observed_decimal = Decimal(str(public_price))
+
+            if (
+                not submitted_decimal.is_finite()
+                or not observed_decimal.is_finite()
+                or observed_decimal <= 0
+            ):
+                raise ValueError("El precio no es finito o positivo")
+
+            submitted_price = submitted_decimal.quantize(
+                Decimal("0.01"),
+                rounding=ROUND_HALF_UP,
             )
-            observed_price = Decimal(str(public_price)).quantize(
-                Decimal("0.01")
+            observed_price = observed_decimal.quantize(
+                Decimal("0.01"),
+                rounding=ROUND_HALF_UP,
             )
 
             if submitted_price != observed_price:
-                blockers.append(
+                errors.append(
                     "El precio enviado no coincide con la landing pública"
                 )
         except (InvalidOperation, ValueError):
-            blockers.append("El precio público observado no es válido")
+            errors.append("El precio público observado no es válido")
 
-    submitted_currency = currency_code.strip().upper()
-    observed_currency = public_currency.strip().upper()
+    if not public_currency.strip():
+        errors.append("Falta la moneda observada en la landing pública")
+    else:
+        try:
+            observed_currency = normalize_currency_code(
+                public_currency,
+                "public_currency",
+            )
+        except ValueError as exc:
+            errors.append(str(exc))
+        else:
+            submitted_currency = submission[
+                "payload"
+            ]["productAttributes"]["price"]["currencyCode"]
 
-    if not observed_currency:
-        blockers.append("Falta la moneda observada en la landing pública")
-    elif submitted_currency != observed_currency:
-        blockers.append(
-            "La moneda enviada no coincide con la landing pública"
-        )
+            if submitted_currency != observed_currency:
+                errors.append(
+                    "La moneda enviada no coincide con la landing pública"
+                )
 
     if not public_availability.strip():
-        blockers.append(
+        errors.append(
             "Falta la disponibilidad observada en la landing pública"
         )
     else:
@@ -339,33 +457,26 @@ def _product_preflight(
             observed_availability = normalize_public_availability(
                 public_availability
             )
-        except ValueError:
-            blockers.append(
-                "La disponibilidad pública observada no es válida"
-            )
+        except ValueError as exc:
+            errors.append(str(exc).replace("availability", "public_availability"))
         else:
             submitted_availability = submission[
                 "payload"
             ]["productAttributes"]["availability"]
 
             if submitted_availability != observed_availability:
-                blockers.append(
+                errors.append(
                     "La disponibilidad enviada no coincide con la landing pública"
                 )
 
-    return {
-        "ready": not blockers,
-        "blockers": blockers,
-        "submission": submission,
-        "link_check": link_check,
-        "image_check": image_check,
-        "landing_observation": {
-            "price": public_price,
-            "currency": public_currency or None,
-            "availability": public_availability or None,
-        },
-        "published": False,
-    }
+    return _preflight_result(
+        errors=errors,
+        warnings=warnings,
+        submission=submission,
+        link_check=link_check,
+        image_check=image_check,
+        landing_observation=landing_observation,
+    )
 
 
 @mcp.tool()
@@ -511,26 +622,32 @@ def google_merchant_preflight_product(
     observada en la landing pública.
     """
 
-    return _product_preflight(
-        data_source_id=data_source_id,
-        offer_id=offer_id,
-        title=title,
-        description=description,
-        link=link,
-        image_link=image_link,
-        price_eur=price_eur,
-        currency_code=currency_code,
-        availability=availability,
-        condition=condition,
-        brand=brand,
-        mpn=mpn,
-        content_language=content_language,
-        feed_label=feed_label,
-        gtin=gtin,
-        public_price=public_price,
-        public_currency=public_currency,
-        public_availability=public_availability,
-    )
+    try:
+        return _product_preflight(
+            data_source_id=data_source_id,
+            offer_id=offer_id,
+            title=title,
+            description=description,
+            link=link,
+            image_link=image_link,
+            price_eur=price_eur,
+            currency_code=currency_code,
+            availability=availability,
+            condition=condition,
+            brand=brand,
+            mpn=mpn,
+            content_language=content_language,
+            feed_label=feed_label,
+            gtin=gtin,
+            public_price=public_price,
+            public_currency=public_currency,
+            public_availability=public_availability,
+        )
+    except Exception as exc:
+        return _unexpected_preflight_result(
+            exc,
+            stage="google_merchant_preflight_product",
+        )
 
 
 def _get_product_by_identity(
