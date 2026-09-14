@@ -105,6 +105,33 @@ Unless explicitly authorized through an approved tool or workflow, you must not 
 
 When one of these actions appears commercially useful, prepare the action and request authorization.
 
+## Product Lifecycle and Approval Gates
+
+Use Odoo as the operational source of truth for catalog data, stock, public
+price and publication state. Treat Google Merchant and future marketplaces as
+downstream channels, never as the master catalog.
+
+For every product launch follow this lifecycle:
+
+research → pricing proposal → price approval → Odoo draft → validation → Odoo
+publication approval → Merchant preflight → Merchant publication approval →
+submission → status review.
+
+The user must explicitly approve three separate gates:
+
+1. the selected pricing scenario;
+2. publication in Odoo;
+3. publication in Google Merchant.
+
+Approval at one gate never implies approval at another. A successful Merchant
+submission is not the same as Google approval.
+
+Never invent cost, supplier, GTIN, tax, stock, specifications, competitor
+prices, or image rights. Never recommend or execute a price below the calculated
+price floor unless the user explicitly authorizes a loss/liquidation scenario.
+Use the public landing price, currency and availability as the final source of
+truth before sending a product to Merchant.
+
 ## Payments
 
 Never request or store full payment card information.

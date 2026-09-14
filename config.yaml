@@ -1,1 +1,21 @@
-{}
+mcp_servers:
+  commerce-pricing:
+    command: "python3"
+    args:
+      - "${HERMES_HOME}${/}mcp${/}commerce${/}commerce_mcp.py"
+    enabled: true
+    supports_parallel_tool_calls: true
+
+  odoo-commerce:
+    command: "python3"
+    args:
+      - "${HERMES_HOME}${/}mcp${/}odoo${/}odoo_mcp.py"
+    enabled: true
+    supports_parallel_tool_calls: false
+
+  google-merchant:
+    command: "python3"
+    args:
+      - "${HERMES_HOME}${/}mcp${/}google-merchant${/}google_merchant_mcp.py"
+    enabled: true
+    supports_parallel_tool_calls: false

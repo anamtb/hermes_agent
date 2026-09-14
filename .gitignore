@@ -40,3 +40,6 @@ Thumbs.db
 
 # MCP local virtual environments
 mcp/**/.venv/
+
+# Local OAuth bootstrap utility (contains installation-specific setup flow)
+mcp/google-merchant/oauth_setup.py

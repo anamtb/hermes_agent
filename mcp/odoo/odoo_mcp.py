@@ -2,6 +2,7 @@ import base64
 import html
 import ipaddress
 import json
+import os
 import re
 import socket
 from pathlib import Path
@@ -15,25 +16,48 @@ from mcp.server import MCPServer
 mcp = MCPServer("Odoo Commerce")
 
 
-# El .env del perfil instalado estará dos niveles por encima de este archivo:
-# .../commerce-test/.env
+# El .env del perfil instalado estará dos niveles por encima de este archivo.
 PROFILE_DIR = Path(__file__).resolve().parents[2]
 ENV_FILE = PROFILE_DIR / ".env"
 
 
 def _env_value(name: str) -> str:
-    for raw_line in ENV_FILE.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
+    if ENV_FILE.exists():
+        for raw_line in ENV_FILE.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
 
-        if not line or line.startswith("#") or "=" not in line:
-            continue
+            if not line or line.startswith("#") or "=" not in line:
+                continue
 
-        key, value = line.split("=", 1)
+            key, value = line.split("=", 1)
 
-        if key.strip() == name:
-            return value.strip().strip('"').strip("'")
+            if key.strip() == name:
+                return value.strip().strip('"').strip("'")
+
+    value = os.environ.get(name)
+
+    if value:
+        return value
 
     raise RuntimeError(f"Falta {name} en .env")
+
+
+def _optional_env_value(name: str) -> str | None:
+    try:
+        return _env_value(name)
+    except RuntimeError:
+        return None
+
+
+def _require_confirmation(
+    value: str,
+    expected: str,
+    action: str,
+) -> None:
+    if value != expected:
+        raise RuntimeError(
+            f"{action} bloqueada. Se requiere confirmación explícita."
+        )
 
 
 def _extract_product_jsonld(page_html: str) -> dict[str, Any] | None:
@@ -491,26 +515,25 @@ def odoo_set_stock(
 
 
 @mcp.tool()
-def odoo_publish_product(product_id: int) -> dict[str, Any]:
+def odoo_publish_product(
+    product_id: int,
+    confirmation: str = "",
+) -> dict[str, Any]:
     """
     Publica un producto en el eCommerce de Odoo.
 
     Requiere que ODOO_ALLOW_PUBLISH=true esté configurado
-    explícitamente en el .env del perfil.
+    explícitamente en el .env del perfil y que el usuario haya aprobado
+    la acción mediante confirmation="PUBLICAR_EN_ODOO".
     """
 
-    values: dict[str, str] = {}
+    _require_confirmation(
+        confirmation,
+        "PUBLICAR_EN_ODOO",
+        "Publicación",
+    )
 
-    for raw_line in ENV_FILE.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-
-        key, value = line.split("=", 1)
-        values[key.strip()] = value.strip().strip('"').strip("'")
-
-    if values.get("ODOO_ALLOW_PUBLISH", "").lower() != "true":
+    if (_optional_env_value("ODOO_ALLOW_PUBLISH") or "").lower() != "true":
         raise RuntimeError(
             "Publicación bloqueada. "
             "ODOO_ALLOW_PUBLISH no está autorizado."
@@ -553,10 +576,6 @@ def odoo_publish_product(product_id: int) -> dict[str, Any]:
     }
 
 
-PRODUCT_IMAGE_DIR = Path(
-    "/home/hermes/.hermes/assets/commerce-test/product-images"
-)
-
 MAX_IMAGE_SIZE = 10 * 1024 * 1024
 
 ALLOWED_IMAGE_TYPES = {
@@ -564,6 +583,15 @@ ALLOWED_IMAGE_TYPES = {
     "image/png",
     "image/webp",
 }
+
+
+def _product_image_dir() -> Path:
+    configured = _optional_env_value("HERMES_PRODUCT_IMAGE_DIR")
+
+    if configured:
+        return Path(configured).expanduser()
+
+    return PROFILE_DIR / "assets" / "product-images"
 
 
 def _get_product_for_image(product_id: int) -> dict[str, Any]:
@@ -738,8 +766,8 @@ def odoo_set_product_image_from_file(
     Establece la imagen principal de un producto usando un archivo
     proporcionado por el usuario.
 
-    Solo permite archivos dentro de:
-    /home/hermes/.hermes/assets/commerce-test/product-images/
+    Solo permite archivos dentro del directorio configurado mediante
+    HERMES_PRODUCT_IMAGE_DIR o, por defecto, assets/product-images del perfil.
 
     Si el producto está publicado requiere:
     confirmation="ACTUALIZAR_IMAGEN_PUBLICA"
@@ -756,7 +784,7 @@ def odoo_set_product_image_from_file(
             "Se requiere confirmación explícita."
         )
 
-    root = PRODUCT_IMAGE_DIR.resolve()
+    root = _product_image_dir().resolve()
     image_path = (root / image_filename).resolve()
 
     if not image_path.is_relative_to(root):
@@ -852,6 +880,314 @@ def odoo_set_product_image_from_url(
     }
 
 
+def _read_product_suppliers(product_id: int) -> list[dict[str, Any]]:
+    return odoo_post(
+        "product.supplierinfo",
+        "search_read",
+        {
+            "domain": [["product_tmpl_id", "=", product_id]],
+            "fields": [
+                "partner_id",
+                "product_name",
+                "product_code",
+                "product_id",
+                "min_qty",
+                "price",
+                "currency_id",
+                "delay",
+                "date_start",
+                "date_end",
+                "company_id",
+            ],
+            "limit": 100,
+        },
+    )
+
+
+def _optional_search_read(
+    model: str,
+    payload: dict[str, Any],
+) -> tuple[list[dict[str, Any]], str | None]:
+    try:
+        records = odoo_post(model, "search_read", payload)
+    except RuntimeError as exc:
+        return [], str(exc)
+
+    return records, None
+
+
+@mcp.tool()
+def odoo_list_product_suppliers(
+    product_id: int,
+) -> dict[str, Any]:
+    """Lista proveedores y precios configurados para un producto.
+
+    No crea ni modifica proveedores. Herramienta de solo lectura.
+    """
+
+    if product_id <= 0:
+        raise ValueError("product_id debe ser mayor que cero")
+
+    product = odoo_get_product(product_id)
+    suppliers = _read_product_suppliers(product_id)
+
+    return {
+        "product_id": product_id,
+        "product_name": product.get("name"),
+        "count": len(suppliers),
+        "suppliers": suppliers,
+    }
+
+
+@mcp.tool()
+def odoo_search_suppliers(
+    search: str = "",
+    limit: int = 20,
+) -> dict[str, Any]:
+    """Busca proveedores existentes por nombre, sin crear contactos."""
+
+    limit = max(1, min(limit, 100))
+    domain: list[list[Any]] = [["supplier_rank", ">", 0]]
+
+    if search.strip():
+        domain.append(["name", "ilike", search.strip()])
+
+    suppliers = odoo_post(
+        "res.partner",
+        "search_read",
+        {
+            "domain": domain,
+            "fields": [
+                "name",
+                "active",
+                "supplier_rank",
+                "company_id",
+            ],
+            "limit": limit,
+        },
+    )
+
+    return {
+        "count": len(suppliers),
+        "suppliers": suppliers,
+    }
+
+
+@mcp.tool()
+def odoo_set_product_cost(
+    product_id: int,
+    standard_cost: float,
+    confirmation: str = "",
+) -> dict[str, Any]:
+    """Registra el coste estándar de un borrador en la moneda de compañía.
+
+    Requiere confirmation="REGISTRAR_COSTE_ODOO". No modifica el precio de
+    venta ni publica el producto.
+    """
+
+    _require_confirmation(
+        confirmation,
+        "REGISTRAR_COSTE_ODOO",
+        "Actualización de coste",
+    )
+
+    if standard_cost <= 0:
+        raise ValueError("standard_cost debe ser mayor que cero")
+
+    products = odoo_post(
+        "product.template",
+        "search_read",
+        {
+            "domain": [["id", "=", product_id]],
+            "fields": [
+                "name",
+                "is_published",
+                "product_variant_id",
+                "cost_currency_id",
+            ],
+            "limit": 1,
+        },
+    )
+
+    if not products:
+        raise ValueError(f"No existe el producto con ID {product_id}")
+
+    product = products[0]
+
+    if product.get("is_published"):
+        raise RuntimeError(
+            "No se modifica el coste mediante esta herramienta "
+            "cuando el producto está publicado"
+        )
+
+    variant = product.get("product_variant_id")
+
+    if not variant:
+        raise RuntimeError("El producto no tiene variante asociada")
+
+    variant_id = variant[0]
+    result = odoo_post(
+        "product.product",
+        "write",
+        {
+            "ids": [variant_id],
+            "vals": {"standard_price": float(standard_cost)},
+        },
+    )
+
+    if result is not True:
+        raise RuntimeError("Odoo no confirmó la actualización del coste")
+
+    updated = odoo_post(
+        "product.product",
+        "search_read",
+        {
+            "domain": [["id", "=", variant_id]],
+            "fields": ["name", "default_code", "standard_price"],
+            "limit": 1,
+        },
+    )
+
+    return {
+        "updated": True,
+        "product_id": product_id,
+        "variant_id": variant_id,
+        "cost_currency": product.get("cost_currency_id"),
+        "variant": updated[0] if updated else None,
+    }
+
+
+@mcp.tool()
+def odoo_set_product_supplier(
+    product_id: int,
+    supplier_id: int,
+    supplier_price: float,
+    supplier_product_code: str = "",
+    supplier_product_name: str = "",
+    min_qty: float = 1.0,
+    delay_days: int = 1,
+    confirmation: str = "",
+) -> dict[str, Any]:
+    """Asocia un proveedor ya existente a un producto borrador.
+
+    Nunca crea el proveedor. Requiere
+    confirmation="ASOCIAR_PROVEEDOR_ODOO".
+    """
+
+    _require_confirmation(
+        confirmation,
+        "ASOCIAR_PROVEEDOR_ODOO",
+        "Asociación de proveedor",
+    )
+
+    if supplier_price <= 0:
+        raise ValueError("supplier_price debe ser mayor que cero")
+
+    if min_qty <= 0:
+        raise ValueError("min_qty debe ser mayor que cero")
+
+    if delay_days < 0:
+        raise ValueError("delay_days no puede ser negativo")
+
+    product = odoo_get_product(product_id)
+
+    if product.get("is_published"):
+        raise RuntimeError(
+            "No se asocian proveedores mediante esta herramienta "
+            "cuando el producto está publicado"
+        )
+
+    suppliers = odoo_post(
+        "res.partner",
+        "search_read",
+        {
+            "domain": [
+                ["id", "=", supplier_id],
+                ["supplier_rank", ">", 0],
+                ["active", "=", True],
+            ],
+            "fields": ["name", "supplier_rank", "active"],
+            "limit": 1,
+        },
+    )
+
+    if not suppliers:
+        raise ValueError(
+            "El proveedor no existe, no está activo o no está configurado "
+            "como proveedor"
+        )
+
+    values: dict[str, Any] = {
+        "partner_id": supplier_id,
+        "product_tmpl_id": product_id,
+        "price": float(supplier_price),
+        "min_qty": float(min_qty),
+        "delay": int(delay_days),
+    }
+
+    if supplier_product_code.strip():
+        values["product_code"] = supplier_product_code.strip()
+
+    if supplier_product_name.strip():
+        values["product_name"] = supplier_product_name.strip()
+
+    existing = odoo_post(
+        "product.supplierinfo",
+        "search_read",
+        {
+            "domain": [
+                ["product_tmpl_id", "=", product_id],
+                ["partner_id", "=", supplier_id],
+            ],
+            "fields": ["partner_id"],
+            "limit": 1,
+        },
+    )
+
+    if existing:
+        supplierinfo_id = existing[0]["id"]
+        result = odoo_post(
+            "product.supplierinfo",
+            "write",
+            {
+                "ids": [supplierinfo_id],
+                "vals": values,
+            },
+        )
+
+        if result is not True:
+            raise RuntimeError(
+                "Odoo no confirmó la actualización del proveedor"
+            )
+
+        created = False
+    else:
+        created_ids = odoo_post(
+            "product.supplierinfo",
+            "create",
+            {"vals_list": [values]},
+        )
+
+        if not created_ids:
+            raise RuntimeError(
+                "Odoo no devolvió el ID de la relación con el proveedor"
+            )
+
+        supplierinfo_id = created_ids[0]
+        created = True
+
+    records = _read_product_suppliers(product_id)
+
+    return {
+        "updated": True,
+        "created": created,
+        "product_id": product_id,
+        "supplier": suppliers[0],
+        "supplierinfo_id": supplierinfo_id,
+        "supplier_records": records,
+    }
+
+
 @mcp.tool()
 def odoo_get_commerce_product(
     product_id: int,
@@ -897,6 +1233,26 @@ def odoo_get_commerce_product(
 
     product = products[0]
 
+    product_details, product_details_error = _optional_search_read(
+        "product.template",
+        {
+            "domain": [["id", "=", product_id]],
+            "fields": [
+                "barcode",
+                "standard_price",
+                "currency_id",
+                "cost_currency_id",
+                "taxes_id",
+                "supplier_taxes_id",
+                "company_id",
+            ],
+            "limit": 1,
+        },
+    )
+
+    if product_details:
+        product.update(product_details[0])
+
     variant = product.get("product_variant_id")
 
     if not variant:
@@ -929,6 +1285,65 @@ def odoo_get_commerce_product(
         )
 
     variant_data = variants[0]
+
+    variant_details, variant_details_error = _optional_search_read(
+        "product.product",
+        {
+            "domain": [["id", "=", variant_id]],
+            "fields": [
+                "barcode",
+                "standard_price",
+            ],
+            "limit": 1,
+        },
+    )
+
+    if variant_details:
+        variant_data.update(variant_details[0])
+
+    suppliers, suppliers_error = _optional_search_read(
+        "product.supplierinfo",
+        {
+            "domain": [["product_tmpl_id", "=", product_id]],
+            "fields": [
+                "partner_id",
+                "product_name",
+                "product_code",
+                "product_id",
+                "min_qty",
+                "price",
+                "currency_id",
+                "delay",
+                "date_start",
+                "date_end",
+                "company_id",
+            ],
+            "limit": 100,
+        },
+    )
+
+    company = product.get("company_id")
+    company_id = company[0] if company else None
+
+    warehouse_domain = (
+        [["company_id", "=", company_id]]
+        if company_id is not None
+        else []
+    )
+
+    warehouses, warehouses_error = _optional_search_read(
+        "stock.warehouse",
+        {
+            "domain": warehouse_domain,
+            "fields": [
+                "name",
+                "code",
+                "company_id",
+                "lot_stock_id",
+            ],
+            "limit": 100,
+        },
+    )
 
     base_url = _env_value("ODOO_BASE_URL").rstrip("/")
 
@@ -1040,11 +1455,32 @@ def odoo_get_commerce_product(
         "product_id": product_id,
         "variant_id": variant_id,
         "name": product.get("name"),
-        "default_code": product.get("default_code"),
+        "default_code": (
+            product.get("default_code")
+            or variant_data.get("default_code")
+        ),
+        "master_sku": (
+            product.get("default_code")
+            or variant_data.get("default_code")
+        ),
+        "barcode": (
+            product.get("barcode")
+            or variant_data.get("barcode")
+        ),
         "description_sale": product.get(
             "description_sale"
         ),
         "list_price": product.get("list_price"),
+        "standard_cost": (
+            product.get("standard_price")
+            if product.get("standard_price") is not None
+            else variant_data.get("standard_price")
+        ),
+        "sales_currency": product.get("currency_id"),
+        "cost_currency": product.get("cost_currency_id"),
+        "customer_taxes": product.get("taxes_id") or [],
+        "supplier_taxes": product.get("supplier_taxes_id") or [],
+        "company": company,
         "is_published": product.get("is_published"),
         "stock": {
             "qty_available": variant_data.get(
@@ -1063,6 +1499,32 @@ def odoo_get_commerce_product(
         "has_image": has_image,
         "image_check": image_check,
         "public_page": public_page,
+        "suppliers": {
+            "count": len(suppliers),
+            "records": suppliers,
+        },
+        "warehouses": {
+            "count": len(warehouses),
+            "records": warehouses,
+        },
+        "availability": {
+            "product_commercial_fields": {
+                "available": product_details_error is None,
+                "error": product_details_error,
+            },
+            "variant_commercial_fields": {
+                "available": variant_details_error is None,
+                "error": variant_details_error,
+            },
+            "suppliers": {
+                "available": suppliers_error is None,
+                "error": suppliers_error,
+            },
+            "warehouses": {
+                "available": warehouses_error is None,
+                "error": warehouses_error,
+            },
+        },
     }
 
 

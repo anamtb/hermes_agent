@@ -1,44 +1,66 @@
-product:
-  id: "rtx-pro-6000-blackwell-server-96gb"
+schema_version: 1
 
-  manufacturer: "NVIDIA"
+identity:
+  slug: "rtx-pro-6000-blackwell-server-96gb"
+  manufacturer:
+    value: "NVIDIA"
+    evidence: "user_supplied"
+  model:
+    value: "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+    evidence: "user_supplied"
+  mpn:
+    value: "900-2G153-0000-000"
+    evidence: "user_supplied"
+  sku:
+    value: null
+    evidence: "unknown"
+  gtin:
+    value: null
+    evidence: "unknown"
 
-  name: "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+specifications:
+  evidence: "user_supplied"
+  facts:
+    memory:
+      capacity_gb: 96
+      type: "GDDR7 ECC"
+    architecture: "NVIDIA Blackwell"
+    interface: "PCIe 5.0 x16"
+    cooling: "Passive"
+    max_power_w: 600
+    category:
+      - professional_gpu
+      - server_gpu
+      - ai_hardware
+    primary_use_cases:
+      - local_llm_inference
+      - llm_fine_tuning
+      - ai_workstations
+      - ai_servers
+      - scientific_computing
+      - professional_rendering
+      - engineering_simulation
 
-  manufacturer_part_number: "900-2G153-0000-000"
+supplier:
+  status: "unknown"
+  records: []
 
-  memory:
-    capacity_gb: 96
-    type: "GDDR7 ECC"
+cost:
+  purchase_cost: null
+  currency: "EUR"
+  shipping_cost: null
+  other_unit_costs: null
+  evidence: "unknown"
 
-  architecture: "NVIDIA Blackwell"
-
-  interface: "PCIe 5.0 x16"
-
-  cooling: "Passive"
-
-  max_power_w: 600
-
-  category:
-    - professional_gpu
-    - server_gpu
-    - ai_hardware
-
-  primary_use_cases:
-    - local_llm_inference
-    - llm_fine_tuning
-    - ai_workstations
-    - ai_servers
-    - scientific_computing
-    - professional_rendering
-    - engineering_simulation
+inventory:
+  quantity: null
+  evidence: "unknown"
+  source_of_truth: "odoo_when_linked"
 
 commercial:
-
-  target_market:
+  target_markets:
     - Spain
     - European Union
-
   target_customers:
     - AI system integrators
     - enterprises deploying on-premise AI
@@ -48,7 +70,6 @@ commercial:
     - universities
     - VFX and rendering studios
     - engineering companies
-
   channels_to_research:
     - amazon
     - ebay
@@ -56,21 +77,48 @@ commercial:
     - direct_b2b
     - odoo_ecommerce
 
+market_research:
+  status: "not_run"
+  last_updated: null
+  observations: []
+
+pricing:
   currency: "EUR"
-
-  target_sales_scenarios:
-
+  tax_rate: null
+  price_floor: null
+  costs_complete: false
+  scenarios:
     conservative:
-      price_ex_vat_eur: 12200
+      net_price: 12200
+      evidence: "estimate"
+      note: "Migrated from the original planning dossier; not approved."
+    moderate:
+      net_price: 13500
+      evidence: "estimate"
+      note: "Migrated from the original base scenario; not approved."
+    aggressive:
+      net_price: 15000
+      evidence: "estimate"
+      note: "Migrated from the original optimistic scenario; not approved."
+  approved_scenario: null
+  approval: null
 
-    base:
-      price_ex_vat_eur: 13500
+sources: []
 
-    optimistic:
-      price_ex_vat_eur: 15000
+odoo:
+  status: "not_linked"
+  product_template_id: null
+  product_variant_id: null
+  default_code: null
+  last_observed_at: null
+
+channels:
+  google_merchant:
+    status: "not_submitted"
+    offer_id: null
+    last_observed_at: null
 
 constraints:
-
   do_not_invent:
     - stock
     - warranty
@@ -78,10 +126,13 @@ constraints:
     - delivery_time
     - product_condition
     - seller_authorization
-
+    - gtin
+    - supplier
+    - cost
   require_human_approval_for:
-    - publishing_listing
-    - changing_price
+    - pricing
+    - publishing_odoo
+    - publishing_google_merchant
     - accepting_orders
     - purchasing_inventory
     - paid_advertising

@@ -1,20 +1,51 @@
 name: hermes-commerce-agent
-version: 0.1.0
+version: 0.2.0
 
 
-description: "Autonomous commerce intelligence agent for hardware products"
+description: "Controlled ecommerce launch agent for Odoo and Google Merchant"
 
 
-author: "Tu nombre o empresa"
+author: "Hermes Commerce Agent contributors"
 
 
 hermes_requires: ">=0.14.0"
+
+
+env_requires:
+- name: ODOO_BASE_URL
+  description: "Base URL de la instancia Odoo"
+  required: true
+- name: ODOO_API_KEY
+  description: "API key de Odoo con permisos mínimos de comercio"
+  required: true
+- name: ODOO_ALLOW_PUBLISH
+  description: "Habilita técnicamente la publicación Odoo; los gates siguen siendo obligatorios"
+  required: false
+  default: "false"
+- name: HERMES_PRODUCT_IMAGE_DIR
+  description: "Directorio local permitido para imágenes aportadas por el usuario"
+  required: false
+  default: ""
+- name: GOOGLE_OAUTH_CLIENT_ID
+  description: "Client ID OAuth de escritorio para Google Merchant"
+  required: true
+- name: GOOGLE_OAUTH_CLIENT_SECRET
+  description: "Client secret OAuth de escritorio para Google Merchant"
+  required: true
+- name: GOOGLE_OAUTH_REFRESH_TOKEN
+  description: "Refresh token OAuth para Google Merchant"
+  required: true
+- name: GOOGLE_MERCHANT_ACCOUNT_ID
+  description: "Cuenta Merchant Center configurada por el instalador"
+  required: true
 
 
 distribution_owned:
 - distribution.yaml
 - SOUL.md
 - config.yaml
+- mcp.json
+- requirements.txt
 - skills/
 - knowledge/
 - sandbox/

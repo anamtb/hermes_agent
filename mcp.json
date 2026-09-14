@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "commerce-pricing": {
+      "command": "python3",
+      "args": [
+        "${HERMES_HOME}${/}mcp${/}commerce${/}commerce_mcp.py"
+      ]
+    },
+    "odoo-commerce": {
+      "command": "python3",
+      "args": [
+        "${HERMES_HOME}${/}mcp${/}odoo${/}odoo_mcp.py"
+      ]
+    },
+    "google-merchant": {
+      "command": "python3",
+      "args": [
+        "${HERMES_HOME}${/}mcp${/}google-merchant${/}google_merchant_mcp.py"
+      ]
+    }
+  }
+}

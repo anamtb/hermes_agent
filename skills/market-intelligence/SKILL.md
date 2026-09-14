@@ -105,6 +105,19 @@ Do not invent marketplace fees.
 
 If platform fees are unknown, explicitly state that they require further investigation.
 
+When this skill is invoked by `commerce-product-launch`, return normalized
+market inputs rather than inventing a final price:
+
+- `market_low`, `market_median`, and `market_high` as customer prices;
+- currency, country, tax-inclusion status, availability, shipping when known;
+- source URL and observation date for each price;
+- exact-product confidence based on manufacturer, model, MPN/SKU, and verified
+  GTIN when available.
+
+Do not mix visually similar variants. The orchestration skill must pass these
+inputs to `commerce_calculate_pricing`, which produces the conservative,
+moderate, and aggressive scenarios and enforces the price floor.
+
 ### 5. Analyze Demand Signals
 
 Look for observable signals that may indicate market interest.

@@ -1,0 +1,86 @@
+schema_version: 1
+
+identity:
+  slug: null
+  manufacturer:
+    value: null
+    evidence: "unknown"
+  model:
+    value: null
+    evidence: "unknown"
+  mpn:
+    value: null
+    evidence: "unknown"
+  sku:
+    value: null
+    evidence: "unknown"
+  gtin:
+    value: null
+    evidence: "unknown"
+
+specifications:
+  evidence: "unknown"
+  facts: {}
+
+supplier:
+  status: "unknown"
+  records: []
+
+cost:
+  purchase_cost: null
+  currency: null
+  shipping_cost: null
+  other_unit_costs: null
+  evidence: "unknown"
+
+inventory:
+  quantity: null
+  evidence: "unknown"
+  source_of_truth: "odoo_when_linked"
+
+commercial:
+  target_markets: []
+  target_customers: []
+  channels_to_research: []
+
+market_research:
+  status: "not_run"
+  last_updated: null
+  observations: []
+
+pricing:
+  currency: null
+  tax_rate: null
+  price_floor: null
+  costs_complete: false
+  scenarios: {}
+  approved_scenario: null
+  approval: null
+
+sources: []
+
+odoo:
+  status: "not_linked"
+  product_template_id: null
+  product_variant_id: null
+  default_code: null
+  last_observed_at: null
+
+channels:
+  google_merchant:
+    status: "not_submitted"
+    offer_id: null
+    last_observed_at: null
+
+constraints:
+  do_not_invent:
+    - gtin
+    - supplier
+    - cost
+    - stock
+    - specifications
+    - image_rights
+  require_human_approval_for:
+    - pricing
+    - publishing_odoo
+    - publishing_google_merchant
