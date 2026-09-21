@@ -3,28 +3,34 @@
 from __future__ import annotations
 
 import re
+import sys
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urlparse
+from urllib.parse import quote
+
+try:
+    from hermes_commerce.channels.validation import (
+        normalize_availability as _common_normalize_availability,
+        normalize_condition as _common_normalize_condition,
+        normalize_currency_code as _common_normalize_currency_code,
+        validate_gtin as _common_validate_gtin,
+        validate_https_url as _common_validate_https_url,
+    )
+except ModuleNotFoundError:
+    # MCPs also support direct script execution from a profile checkout.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+    from hermes_commerce.channels.validation import (
+        normalize_availability as _common_normalize_availability,
+        normalize_condition as _common_normalize_condition,
+        normalize_currency_code as _common_normalize_currency_code,
+        validate_gtin as _common_validate_gtin,
+        validate_https_url as _common_validate_https_url,
+    )
 
 
-GTIN_LENGTHS = {8, 12, 13, 14}
 MICROS_PER_CURRENCY_UNIT = Decimal("1000000")
 AMOUNT_MICROS_QUANTUM = Decimal("1")
-AVAILABILITY_ALIASES = {
-    "instock": "IN_STOCK",
-    "outofstock": "OUT_OF_STOCK",
-    "preorder": "PREORDER",
-    "backorder": "BACKORDER",
-}
-CONDITION_ALIASES = {
-    "new": "NEW",
-    "newcondition": "NEW",
-    "refurbished": "REFURBISHED",
-    "refurbishedcondition": "REFURBISHED",
-    "used": "USED",
-    "usedcondition": "USED",
-}
 
 
 def require_confirmation(value: str, expected: str) -> None:
@@ -35,13 +41,7 @@ def require_confirmation(value: str, expected: str) -> None:
 
 
 def normalize_availability(value: str) -> str:
-    normalized = value.strip().rstrip("/").rsplit("/", 1)[-1]
-    alias = re.sub(r"[^a-z0-9]", "", normalized.lower())
-
-    if alias not in AVAILABILITY_ALIASES:
-        raise ValueError("availability no es válido")
-
-    return AVAILABILITY_ALIASES[alias]
+    return _common_normalize_availability(value)
 
 
 def normalize_public_availability(value: str) -> str:
@@ -49,62 +49,19 @@ def normalize_public_availability(value: str) -> str:
 
 
 def normalize_condition(value: str) -> str:
-    normalized = value.strip().rstrip("/").rsplit("/", 1)[-1]
-    alias = re.sub(r"[^a-z0-9]", "", normalized.lower())
-
-    if alias not in CONDITION_ALIASES:
-        raise ValueError("condition no es válido")
-
-    return CONDITION_ALIASES[alias]
+    return _common_normalize_condition(value)
 
 
 def validate_gtin(value: str) -> str:
-    normalized = value.strip()
-
-    if not normalized.isdigit() or len(normalized) not in GTIN_LENGTHS:
-        raise ValueError("gtin debe tener 8, 12, 13 o 14 dígitos")
-
-    body = normalized[:-1]
-    weighted_sum = sum(
-        int(digit) * (3 if (len(body) - index) % 2 else 1)
-        for index, digit in enumerate(body)
-    )
-    expected_check_digit = (10 - weighted_sum % 10) % 10
-
-    if int(normalized[-1]) != expected_check_digit:
-        raise ValueError("gtin tiene un dígito de control no válido")
-
-    return normalized
+    return _common_validate_gtin(value)
 
 
 def validate_https_url(value: str, field_name: str) -> str:
-    normalized = value.strip()
-
-    try:
-        parsed = urlparse(normalized)
-        port = parsed.port
-    except ValueError as exc:
-        raise ValueError(f"{field_name} no es una URL válida") from exc
-
-    if parsed.scheme.lower() != "https" or not parsed.hostname:
-        raise ValueError(f"{field_name} debe ser una URL HTTPS")
-
-    if parsed.username is not None or parsed.password is not None:
-        raise ValueError(f"{field_name} no puede incluir credenciales")
-
-    if port is not None and not 1 <= port <= 65535:
-        raise ValueError(f"{field_name} contiene un puerto no válido")
-
-    return normalized
+    return _common_validate_https_url(value, field_name)
 
 
 def normalize_currency_code(value: str, field_name: str = "currency_code") -> str:
-    normalized = value.strip().upper()
-
-    if not re.fullmatch(r"[A-Z]{3}", normalized):
-        raise ValueError(f"{field_name} debe ser un código ISO 4217")
-
-    return normalized
+    return _common_normalize_currency_code(value, field_name)
 
 
 def product_resource_id(

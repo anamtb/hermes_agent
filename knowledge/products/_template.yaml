@@ -1,4 +1,4 @@
-schema_version: 1
+schema_version: 2
 
 identity:
   slug: null
@@ -68,9 +68,21 @@ odoo:
 
 channels:
   google_merchant:
+    enabled: false
+    external_id: null
     status: "not_submitted"
-    offer_id: null
-    last_observed_at: null
+    last_sync: null
+  amazon:
+    enabled: false
+    seller_sku: null
+    asin: null
+    status: "not_configured"
+    last_sync: null
+  pccomponentes:
+    enabled: false
+    offer_sku: null
+    status: "not_configured"
+    last_sync: null
 
 constraints:
   do_not_invent:

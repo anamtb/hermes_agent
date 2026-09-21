@@ -182,3 +182,60 @@ def calculate_pricing_scenarios(
             "missing_optional_costs_treated_as_zero": True,
         },
     }
+
+
+def calculate_channel_pricing_scenarios(
+    *,
+    base_cost: float,
+    tax_rate: float,
+    shipping_cost: float | None = None,
+    channel_fixed_fee: float | None = None,
+    channel_percent_fee: float | None = None,
+    other_channel_costs: float | None = None,
+    market_low: float | None = None,
+    market_median: float | None = None,
+    market_high: float | None = None,
+    allow_below_floor: bool = False,
+) -> dict[str, Any]:
+    """Channel-named facade over the stable pricing implementation.
+
+    Unknown inputs remain explicit. Calculated figures are useful scenarios,
+    but profit is not labelled definitive until every channel cost is known.
+    """
+
+    result = calculate_pricing_scenarios(
+        purchase_cost=base_cost,
+        tax_rate=tax_rate,
+        shipping_cost=shipping_cost,
+        other_unit_costs=other_channel_costs,
+        channel_fee_fixed=channel_fixed_fee,
+        channel_fee_percent=channel_percent_fee,
+        market_low=market_low,
+        market_median=market_median,
+        market_high=market_high,
+        allow_below_floor=allow_below_floor,
+    )
+    result["channel_cost_inputs"] = {
+        "base_cost": base_cost,
+        "shipping_cost": shipping_cost if shipping_cost is not None else "UNKNOWN",
+        "channel_fixed_fee": (
+            channel_fixed_fee if channel_fixed_fee is not None else "UNKNOWN"
+        ),
+        "channel_percent_fee": (
+            channel_percent_fee if channel_percent_fee is not None else "UNKNOWN"
+        ),
+        "other_channel_costs": (
+            other_channel_costs if other_channel_costs is not None else "UNKNOWN"
+        ),
+    }
+    result["profit_status"] = "DEFINITIVE" if result["costs_complete"] else "UNKNOWN"
+    for scenario in result["scenarios"].values():
+        scenario["definitive_unit_profit"] = (
+            scenario["unit_profit"] if result["costs_complete"] else "UNKNOWN"
+        )
+        scenario["definitive_gross_margin_percent"] = (
+            scenario["gross_margin_percent"]
+            if result["costs_complete"]
+            else "UNKNOWN"
+        )
+    return result

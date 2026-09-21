@@ -1,6 +1,6 @@
 ---
 name: commerce-product-launch
-description: Orchestrate a product from verified identity and market research through pricing approval, Odoo draft/publication, and Google Merchant submission/review.
+description: Orchestrate a product from verified identity and market research through pricing approval, Odoo publication, and approved downstream channel launches.
 ---
 
 # Commerce Product Launch
@@ -12,11 +12,12 @@ Guide a product through a controlled ecommerce launch using:
 - `market-intelligence` and web search for evidence-backed research;
 - `commerce_calculate_pricing` for reusable price scenarios;
 - Odoo MCP as the operational catalog and stock source of truth;
-- Google Merchant MCP as a downstream publication channel.
+- the `channel-management` skill for downstream channel orchestration.
 
 This skill orchestrates tools. It does not implement HTTP calls or low-level API
-logic. The current channel scope is Odoo plus Google Merchant. Do not implement
-or imply Amazon/eBay publication.
+logic. Google Merchant is implemented. Amazon and PcComponentes/Mirakl are
+scaffolded only: discover their declared capabilities, but do not imply that
+catalog lookup, preflight, publication, price, stock, or orders work.
 
 ## Evidence labels
 
@@ -195,7 +196,35 @@ Then call `odoo_get_commerce_product` again. Require:
 The landing price is the final source of truth for Merchant. If internal and
 public price/currency/availability differ, stop and explain the mismatch.
 
+### CHANNEL_DISCOVERY
+
+Invoke `channel-management` after `ODOO_PUBLISHED` and ask:
+
+> ¿En qué canales quieres comercializarlo?
+
+Discover capabilities first and show only channels whose MCP is available,
+with their truthful status (`IMPLEMENTED`, `SCAFFOLDED`, or `NOT_CONFIGURED`).
+Typical choices are Google Merchant, Amazon, and PcComponentes. A scaffold may
+be shown as planned/unavailable but cannot advance to publication.
+
+For every selected implemented channel follow, independently:
+
+```text
+CHANNEL_PREFLIGHT
+→ CHANNEL_PRICING
+→ CHANNEL_APPROVAL
+→ CHANNEL_PUBLISH
+→ CHANNEL_REVIEW
+→ CHANNEL_SYNC
+```
+
+Approval is per channel. Pricing and shipping assumptions from one channel do
+not carry over to another. Unknown fees remain `UNKNOWN`, and the workflow must
+not claim a definitive profit until all channel costs are known.
+
 ### MERCHANT_PREFLIGHT
+
+This is Google Merchant's implementation of `CHANNEL_PREFLIGHT`.
 
 Discover the configured account and API data source using Merchant read tools.
 If several human-readable options exist, present their names. Do not ask the
@@ -218,11 +247,15 @@ calculated price for a different observed landing price.
 
 ### MERCHANT_PUBLISH_APPROVAL — GATE 3
 
+This is Google Merchant's `CHANNEL_APPROVAL` gate.
+
 Show the complete normalized payload, data-source name, preflight evidence, and
 all remaining uncertainties. Stop until the user explicitly approves Google
 Merchant publication.
 
 ### MERCHANT_SUBMITTED
+
+This is Google Merchant's `CHANNEL_PUBLISH` state.
 
 Only after Gate 3 call:
 
@@ -236,6 +269,8 @@ google_merchant_upsert_product(
 Never invent confirmation strings on behalf of the user.
 
 ### MERCHANT_REVIEW
+
+This is Google Merchant's `CHANNEL_REVIEW` state.
 
 Merchant processing is asynchronous. Use `google_merchant_get_product` and
 `google_merchant_get_product_issues` after an appropriate delay. Report each

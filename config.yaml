@@ -19,3 +19,18 @@ mcp_servers:
       - "${HERMES_HOME}${/}mcp${/}google-merchant${/}google_merchant_mcp.py"
     enabled: true
     supports_parallel_tool_calls: false
+
+  # Scaffolds disabled by default: capability discovery only, no HTTP or writes.
+  amazon-commerce:
+    command: "python3"
+    args:
+      - "${HERMES_HOME}${/}mcp${/}amazon${/}amazon_mcp.py"
+    enabled: false
+    supports_parallel_tool_calls: true
+
+  pccomponentes-commerce:
+    command: "python3"
+    args:
+      - "${HERMES_HOME}${/}mcp${/}pccomponentes${/}pccomponentes_mcp.py"
+    enabled: false
+    supports_parallel_tool_calls: true

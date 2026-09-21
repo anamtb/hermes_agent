@@ -2,6 +2,7 @@ import ipaddress
 import os
 import re
 import socket
+import sys
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,12 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 from mcp.server import MCPServer
+
+try:
+    from hermes_commerce.channels.google_merchant import GoogleMerchantChannel
+except ModuleNotFoundError:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+    from hermes_commerce.channels.google_merchant import GoogleMerchantChannel
 
 from product_validation import (
     build_product_submission,
@@ -894,6 +901,42 @@ def google_merchant_get_product_issues(
         "creation_date": status.get("creationDate"),
         "last_update_date": status.get("lastUpdateDate"),
         "google_expiration_date": status.get("googleExpirationDate"),
+    }
+
+
+def _google_merchant_channel() -> GoogleMerchantChannel:
+    """Bind the common channel adapter to the established MCP implementation."""
+
+    return GoogleMerchantChannel(
+        discover_tool=google_merchant_list_accounts,
+        preflight_tool=google_merchant_preflight_product,
+        publish_tool=google_merchant_upsert_product,
+        get_tool=google_merchant_get_product,
+        issues_tool=google_merchant_get_product_issues,
+    )
+
+
+@mcp.tool()
+def google_merchant_get_capabilities() -> dict[str, Any]:
+    """Return common channel capabilities without making a network request."""
+
+    settings = _load_env()
+    configured = all(
+        settings.get(name) or os.environ.get(name)
+        for name in (
+            "GOOGLE_OAUTH_CLIENT_ID",
+            "GOOGLE_OAUTH_CLIENT_SECRET",
+            "GOOGLE_OAUTH_REFRESH_TOKEN",
+            "GOOGLE_MERCHANT_ACCOUNT_ID",
+        )
+    )
+    channel = _google_merchant_channel()
+    return {
+        "channel": channel.name,
+        "implementation_status": "IMPLEMENTED",
+        "configured": configured,
+        "network_request_performed": False,
+        "capabilities": channel.capabilities.as_dict(),
     }
 
 

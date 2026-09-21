@@ -1,8 +1,8 @@
 name: hermes-commerce-agent
-version: 0.2.0
+version: 0.3.0
 
 
-description: "Controlled ecommerce launch agent for Odoo and Google Merchant"
+description: "Controlled multi-channel commerce agent with Odoo as source of truth"
 
 
 author: "Hermes Commerce Agent contributors"
@@ -38,10 +38,44 @@ env_requires:
 - name: GOOGLE_MERCHANT_ACCOUNT_ID
   description: "Cuenta Merchant Center configurada por el instalador"
   required: true
+- name: AMAZON_SP_API_CLIENT_ID
+  description: "Placeholder para futura integración Amazon SP-API (scaffold no operativo)"
+  required: false
+  default: ""
+- name: AMAZON_SP_API_CLIENT_SECRET
+  description: "Placeholder secreto para futura integración Amazon SP-API"
+  required: false
+  default: ""
+- name: AMAZON_SP_API_REFRESH_TOKEN
+  description: "Placeholder secreto para futura integración Amazon SP-API"
+  required: false
+  default: ""
+- name: AMAZON_SELLER_ID
+  description: "Placeholder para el seller futuro; no se deduce ni hardcodea"
+  required: false
+  default: ""
+- name: AMAZON_MARKETPLACE_ID
+  description: "Placeholder para marketplace futuro; no se deduce ni hardcodea"
+  required: false
+  default: ""
+- name: PCCOMPONENTES_MIRAKL_API_URL
+  description: "Placeholder para URL verificada de la futura API Mirakl"
+  required: false
+  default: ""
+- name: PCCOMPONENTES_MIRAKL_API_KEY
+  description: "Placeholder secreto para futura integración PcComponentes"
+  required: false
+  default: ""
+- name: PCCOMPONENTES_SHOP_ID
+  description: "Placeholder para shop futuro; no se deduce ni hardcodea"
+  required: false
+  default: ""
 
 
 distribution_owned:
 - distribution.yaml
+- pyproject.toml
+- src/
 - SOUL.md
 - config.yaml
 - mcp.json
