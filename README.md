@@ -208,7 +208,12 @@ debe informarlo como `unknown/unavailable`, no inventarlo.
 - `google_merchant_upsert_product`, protegido por
   `confirmation="PUBLICAR_EN_GOOGLE_MERCHANT"` y por el mismo preflight;
 - `google_merchant_get_product` y `google_merchant_get_product_issues` para
-  revisar el resultado procesado.
+  revisar el resultado procesado;
+- `google_merchant_get_shipping_settings`, solo lectura;
+- `google_merchant_prepare_shipping_policy`, que valida `FREE` o `FLAT_RATE`,
+  conserva servicios/almacenes existentes y prepara un diff sin escribir;
+- `google_merchant_set_shipping_policy`, protegido por el `etag` aprobado y
+  `confirmation="CONFIGURAR_ENVIO_GOOGLE_MERCHANT"`.
 
 Cuenta, fuente, idioma, feed label, moneda, dominio y offer ID no se codifican
 para una instalación concreta. Se leen de configuración local, herramientas de
@@ -216,6 +221,12 @@ descubrimiento o parámetros verificados.
 
 Una inserción aceptada no implica aprobación: Merchant procesa el producto de
 forma asíncrona y puede dejarlo pendiente o rechazado con incidencias.
+
+La política de shipping tiene un gate independiente de la publicación de
+producto. Primero se lee el recurso completo, luego se prepara y revisa el diff,
+después se aprueba explícitamente y finalmente se vuelve a leer para confirmar.
+Si el `etag` cambia, la escritura se cancela y exige un nuevo preflight y una
+nueva aprobación. País, moneda, tarifa y tiempos nunca se inventan.
 
 ## Política de imágenes
 

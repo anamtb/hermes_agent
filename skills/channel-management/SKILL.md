@@ -69,9 +69,40 @@ Reconcile channel views with Odoo. Odoo remains master for catalog, stock, and
 operational data. Use supported updates only; otherwise report the missing
 capability and required next action.
 
+## Google Merchant shipping policy
+
+Shipping configuration is a separate account-level write and has its own gate;
+product publication approval never authorizes it.
+
+```text
+SHIPPING_DISCOVERY
+→ SHIPPING_PREFLIGHT
+→ SHIPPING_APPROVAL
+→ SHIPPING_APPLY
+→ SHIPPING_REVIEW
+```
+
+1. Read the current resource with `google_merchant_get_shipping_settings`.
+2. Call `google_merchant_prepare_shipping_policy` with user-supplied country,
+   service name, currency, rate, handling days, and transit days. Never invent
+   any of these values. Review the returned full resource, diff, and `etag`.
+3. Stop at `SHIPPING_APPROVAL`. Show whether the service is created or updated,
+   the exact price, countries, timings, active state, preserved services and
+   warehouses, and the expected `etag`.
+4. Only after explicit approval call `google_merchant_set_shipping_policy` with
+   `confirmation="CONFIGURAR_ENVIO_GOOGLE_MERCHANT"` and the approved `etag`.
+5. If the `etag` changed, do not retry the write automatically. Repeat discovery
+   and preflight, show the new diff, and obtain a new approval.
+6. Read the shipping settings again and report the observed result.
+
+The tool supports only `FREE` and `FLAT_RATE`. Other shipping models are not to
+be approximated with a flat rate. Google replaces the complete shipping
+resource on insert, so all unrelated services and warehouses must be preserved.
+
 ## Non-negotiable rules
 
 - Every channel has its own publication approval gate.
+- Shipping policy has a separate approval gate from product publication.
 - Never publish without a successful preflight.
 - Pricing may vary by channel and requires channel-specific evidence.
 - Never invent fees, shipping, marketplace IDs, ASINs, or Mirakl IDs.

@@ -3,6 +3,7 @@ import os
 import re
 import socket
 import sys
+from copy import deepcopy
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,12 @@ from product_validation import (
     normalize_public_availability,
     product_resource_id,
     require_confirmation,
+)
+from shipping_policy import (
+    build_shipping_service,
+    describe_service_diff,
+    merge_service,
+    summarize_service,
 )
 
 
@@ -1076,6 +1083,367 @@ def google_merchant_upsert_product(
         "preflight": preflight,
         "product_input": result,
     }
+
+
+SHIPPING_CONFIRMATION = "CONFIGURAR_ENVIO_GOOGLE_MERCHANT"
+
+
+def _shipping_settings_path(account_id: str) -> str:
+    return f"/accounts/v1/accounts/{account_id}/shippingSettings"
+
+
+def _fetch_shipping_settings(account_id: str) -> dict[str, Any]:
+    """Read the current shipping settings, wrapping failures as MerchantApiError."""
+
+    try:
+        return _merchant_get(_shipping_settings_path(account_id))
+    except RuntimeError as exc:
+        raise MerchantApiError(
+            category="shipping_settings_read_failed",
+            message=(
+                "No se pudo leer la configuración de envío actual de "
+                "Merchant Center"
+            ),
+            google_message=_safe_exception_message(exc),
+        ) from exc
+
+
+def _is_etag_conflict(exc: MerchantApiError) -> bool:
+    haystack = " ".join(
+        str(part) for part in (exc.google_status, exc.google_message) if part
+    ).lower()
+
+    return exc.category == "conflict" or "etag" in haystack
+
+
+def _unexpected_shipping_result(exc: Exception, *, stage: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "errors": [f"Error interno inesperado durante {stage}"],
+        "diagnostic": {
+            "stage": stage,
+            "exception_type": type(exc).__name__,
+            "message": _safe_exception_message(exc),
+        },
+    }
+
+
+@mcp.tool()
+def google_merchant_get_shipping_settings() -> dict[str, Any]:
+    """Lee la configuración de envío actual de la cuenta configurada.
+
+    Herramienta de solo lectura. Devuelve el recurso ShippingSettings tal
+    como lo entrega Google (etag, services con serviceName/active/
+    deliveryCountries/currencyCode/deliveryTime/rateGroups, y warehouses si
+    existen), sin recortar ni reinterpretar campos.
+    """
+
+    account_id = _configured_account_id()
+
+    return _merchant_get(_shipping_settings_path(account_id))
+
+
+def _prepare_shipping_policy(
+    *,
+    country_code: str,
+    service_name: str,
+    currency_code: str,
+    shipping_type: str,
+    min_handling_days: int,
+    max_handling_days: int,
+    min_transit_days: int,
+    max_transit_days: int,
+    flat_rate: float | None,
+    active: bool,
+) -> dict[str, Any]:
+    try:
+        new_service = build_shipping_service(
+            service_name=service_name,
+            country_code=country_code,
+            currency_code=currency_code,
+            shipping_type=shipping_type,
+            min_handling_days=min_handling_days,
+            max_handling_days=max_handling_days,
+            min_transit_days=min_transit_days,
+            max_transit_days=max_transit_days,
+            flat_rate=flat_rate,
+            active=active,
+        )
+    except ValueError as exc:
+        return {
+            "ok": False,
+            "errors": [str(exc)],
+            "current_etag": None,
+            "proposed_service": None,
+            "proposed_resource": None,
+            "diff": None,
+            "write_performed": False,
+        }
+
+    account_id = _configured_account_id()
+
+    try:
+        current_settings = _fetch_shipping_settings(account_id)
+    except MerchantApiError as exc:
+        return {
+            "ok": False,
+            "errors": [str(exc)],
+            "error": exc.as_dict(),
+            "current_etag": None,
+            "proposed_service": new_service,
+            "proposed_resource": None,
+            "diff": None,
+            "write_performed": False,
+        }
+
+    current_etag = current_settings.get("etag", "")
+    merged_services, previous_service = merge_service(
+        current_settings.get("services"),
+        new_service,
+    )
+
+    proposed_resource = deepcopy(current_settings)
+    proposed_resource["name"] = (
+        current_settings.get("name")
+        or f"accounts/{account_id}/shippingSettings"
+    )
+    proposed_resource["services"] = merged_services
+    proposed_resource["etag"] = current_etag
+
+    return {
+        "ok": True,
+        "errors": [],
+        "account_id": account_id,
+        "service_name": new_service["serviceName"],
+        "current_etag": current_etag,
+        "is_new_service": previous_service is None,
+        "previous_service": previous_service,
+        "proposed_service": new_service,
+        "proposed_resource": proposed_resource,
+        "preview": summarize_service(new_service),
+        "diff": describe_service_diff(previous_service, new_service),
+        "write_performed": False,
+    }
+
+
+@mcp.tool()
+def google_merchant_prepare_shipping_policy(
+    country_code: str,
+    service_name: str,
+    currency_code: str,
+    shipping_type: str,
+    min_handling_days: int,
+    max_handling_days: int,
+    min_transit_days: int,
+    max_transit_days: int,
+    flat_rate: float | None = None,
+    active: bool = True,
+) -> dict[str, Any]:
+    """Prepara, sin escribir nada, una política de envío para un servicio.
+
+    Valida los parámetros, lee la configuración de envío actual y calcula el
+    recurso completo que se enviaría a ``shippingSettings:insert``,
+    preservando cualquier otro servicio o almacén existente y modificando
+    únicamente ``service_name``. Nunca llama a ``:insert``. ``shipping_type``
+    debe ser ``FREE`` o ``FLAT_RATE``; ``flat_rate`` es obligatorio solo para
+    ``FLAT_RATE``. Devuelve ``preview`` y ``diff`` para revisión humana antes
+    de aprobar ``google_merchant_set_shipping_policy``.
+    """
+
+    try:
+        return _prepare_shipping_policy(
+            country_code=country_code,
+            service_name=service_name,
+            currency_code=currency_code,
+            shipping_type=shipping_type,
+            min_handling_days=min_handling_days,
+            max_handling_days=max_handling_days,
+            min_transit_days=min_transit_days,
+            max_transit_days=max_transit_days,
+            flat_rate=flat_rate,
+            active=active,
+        )
+    except Exception as exc:
+        return _unexpected_shipping_result(
+            exc,
+            stage="google_merchant_prepare_shipping_policy",
+        )
+
+
+def _set_shipping_policy(
+    *,
+    country_code: str,
+    service_name: str,
+    currency_code: str,
+    shipping_type: str,
+    min_handling_days: int,
+    max_handling_days: int,
+    min_transit_days: int,
+    max_transit_days: int,
+    flat_rate: float | None,
+    active: bool,
+    expected_etag: str,
+) -> dict[str, Any]:
+    try:
+        new_service = build_shipping_service(
+            service_name=service_name,
+            country_code=country_code,
+            currency_code=currency_code,
+            shipping_type=shipping_type,
+            min_handling_days=min_handling_days,
+            max_handling_days=max_handling_days,
+            min_transit_days=min_transit_days,
+            max_transit_days=max_transit_days,
+            flat_rate=flat_rate,
+            active=active,
+        )
+    except ValueError as exc:
+        return {
+            "ok": False,
+            "applied": False,
+            "conflict": False,
+            "errors": [str(exc)],
+        }
+
+    account_id = _configured_account_id()
+
+    try:
+        current_settings = _fetch_shipping_settings(account_id)
+    except MerchantApiError as exc:
+        return {
+            "ok": False,
+            "applied": False,
+            "conflict": False,
+            "errors": [str(exc)],
+            "error": exc.as_dict(),
+        }
+
+    current_etag = current_settings.get("etag", "")
+
+    if expected_etag != current_etag:
+        return {
+            "ok": False,
+            "applied": False,
+            "conflict": True,
+            "errors": [
+                "La configuración de envío cambió desde la última lectura "
+                "o aprobación. Vuelve a ejecutar "
+                "google_merchant_prepare_shipping_policy y solicita una "
+                "nueva aprobación antes de escribir."
+            ],
+            "current_etag": current_etag,
+            "expected_etag": expected_etag,
+            "current_settings": current_settings,
+        }
+
+    merged_services, previous_service = merge_service(
+        current_settings.get("services"),
+        new_service,
+    )
+
+    request_body = deepcopy(current_settings)
+    request_body["name"] = (
+        current_settings.get("name")
+        or f"accounts/{account_id}/shippingSettings"
+    )
+    request_body["services"] = merged_services
+    request_body["etag"] = current_etag
+
+    try:
+        result = _merchant_post(
+            f"{_shipping_settings_path(account_id)}:insert",
+            json_data=request_body,
+        )
+    except MerchantApiError as exc:
+        return {
+            "ok": False,
+            "applied": False,
+            "conflict": _is_etag_conflict(exc),
+            "errors": [str(exc)],
+            "error": exc.as_dict(),
+        }
+
+    return {
+        "ok": True,
+        "applied": True,
+        "conflict": False,
+        "errors": [],
+        "account_id": account_id,
+        "service_name": new_service["serviceName"],
+        "previous_service": previous_service,
+        "new_service": new_service,
+        "diff": describe_service_diff(previous_service, new_service),
+        "updated_settings": result,
+        "new_etag": result.get("etag"),
+    }
+
+
+@mcp.tool()
+def google_merchant_set_shipping_policy(
+    country_code: str,
+    service_name: str,
+    currency_code: str,
+    shipping_type: str,
+    min_handling_days: int,
+    max_handling_days: int,
+    min_transit_days: int,
+    max_transit_days: int,
+    expected_etag: str,
+    confirmation: str,
+    flat_rate: float | None = None,
+    active: bool = True,
+) -> dict[str, Any]:
+    """Configura en Google Merchant un único servicio de envío tras aprobación.
+
+    Requiere ``confirmation="CONFIGURAR_ENVIO_GOOGLE_MERCHANT"`` y
+    ``expected_etag`` (el etag devuelto por
+    ``google_merchant_prepare_shipping_policy``). Antes de escribir vuelve a
+    leer ``shippingSettings`` y compara el etag: si cambió, no sobrescribe y
+    devuelve un conflicto controlado que exige repetir la vista previa y
+    obtener una nueva aprobación. Preserva todos los demás servicios y
+    almacenes existentes y sustituye el recurso completo usando el etag más
+    reciente, tal y como exige ``shippingSettings:insert``.
+    """
+
+    try:
+        require_confirmation(confirmation, SHIPPING_CONFIRMATION)
+    except RuntimeError as exc:
+        return {
+            "ok": False,
+            "applied": False,
+            "conflict": False,
+            "errors": [_safe_exception_message(exc)],
+            "error": {
+                "type": "confirmation_required",
+                "category": "confirmation_required",
+            },
+        }
+
+    try:
+        return _set_shipping_policy(
+            country_code=country_code,
+            service_name=service_name,
+            currency_code=currency_code,
+            shipping_type=shipping_type,
+            min_handling_days=min_handling_days,
+            max_handling_days=max_handling_days,
+            min_transit_days=min_transit_days,
+            max_transit_days=max_transit_days,
+            flat_rate=flat_rate,
+            active=active,
+            expected_etag=expected_etag,
+        )
+    except Exception as exc:
+        return {
+            "ok": False,
+            "applied": False,
+            "conflict": False,
+            "errors": ["Error interno inesperado al configurar el envío"],
+            "diagnostic": {
+                "exception_type": type(exc).__name__,
+                "message": _safe_exception_message(exc),
+            },
+        }
 
 
 if __name__ == "__main__":

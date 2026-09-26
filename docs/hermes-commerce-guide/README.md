@@ -13,6 +13,8 @@ de cada dato y qué sucede cuando una persona pide publicar un producto nuevo.
    la petición inicial hasta la revisión en Google Merchant.
 4. [Fuentes de verdad y seguridad](04-fuentes-y-seguridad.md): propietario de
    cada dato, archivos persistentes y operaciones protegidas.
+5. [Funciones disponibles en los MCP](05-funciones-mcp.md): inventario visual
+   de todas las herramientas expuestas actualmente.
 
 ## Diagramas Mermaid originales
 
@@ -22,6 +24,7 @@ Los archivos fuente se encuentran en [`diagrams/`](diagrams/README.md):
 - [`ciclo-producto.mmd`](diagrams/ciclo-producto.mmd)
 - [`ejemplo-publicacion.mmd`](diagrams/ejemplo-publicacion.mmd)
 - [`fuentes-de-verdad.mmd`](diagrams/fuentes-de-verdad.mmd)
+- [`funciones-mcp.mmd`](diagrams/funciones-mcp.mmd)
 
 GitHub renderiza automáticamente los bloques Mermaid incluidos en los
 documentos Markdown. Los archivos `.mmd` también pueden copiarse en Mermaid

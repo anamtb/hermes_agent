@@ -6,6 +6,7 @@ Esta carpeta contiene los diagramas sin texto explicativo:
 - `ciclo-producto.mmd`: estados y tres puertas de aprobación.
 - `ejemplo-publicacion.mmd`: secuencia de una conversación completa.
 - `fuentes-de-verdad.mmd`: propietario de cada categoría de información.
+- `funciones-mcp.mmd`: inventario de herramientas expuestas por cada MCP.
 
 Los mismos gráficos están incluidos y explicados en los documentos del
 directorio superior. Mantén ambas versiones sincronizadas al modificarlos.

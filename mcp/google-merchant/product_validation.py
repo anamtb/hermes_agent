@@ -79,16 +79,30 @@ def product_resource_id(
     return quote("~".join(parts), safe="~")
 
 
-def price_to_amount_micros(price: Decimal | int | float | str) -> int:
-    """Convert a currency-unit price to Merchant API micros deterministically."""
+def price_to_amount_micros(
+    price: Decimal | int | float | str,
+    *,
+    allow_zero: bool = False,
+) -> int:
+    """Convert a currency-unit price to Merchant API micros deterministically.
+
+    ``allow_zero`` permits a zero amount (for example, free shipping); product
+    prices must remain strictly positive and keep the default ``False``.
+    """
 
     try:
         decimal_price = Decimal(str(price))
     except (InvalidOperation, TypeError, ValueError) as exc:
         raise ValueError("El precio debe ser numérico") from exc
 
-    if not decimal_price.is_finite() or decimal_price <= 0:
-        raise ValueError("El precio debe ser mayor que cero")
+    if not decimal_price.is_finite() or decimal_price < 0 or (
+        decimal_price == 0 and not allow_zero
+    ):
+        raise ValueError(
+            "El precio debe ser mayor o igual que cero"
+            if allow_zero
+            else "El precio debe ser mayor que cero"
+        )
 
     try:
         return int(
